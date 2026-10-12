@@ -277,6 +277,90 @@ class CaptureSenderTest {
     }
 
     @Test
+    fun `retry after the Voice job failed asks for a new job under a new key with its own metadata`() = runBlocking {
+        setUp()
+        val checker = CaptureStatusChecker(store, api)
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        sender.send("c-voice")
+        api.job = AudioJob(id = "job-1", status = "failed", errorSummary = "No speech was heard in the recording. Record it again.")
+        checker.refresh("c-voice")
+        val failed = store.get("c-voice")!!
+        assertTrue(failed.voiceJobFailed)
+        assertTrue(failed.retryable)
+        assertEquals("Transcription failed: No speech was heard in the recording. Record it again.", CaptureStatusText.describe(failed))
+        // Not swept away with the sent ones: it waits for Retry or Delete.
+        assertEquals(0, store.pruneSent(now.plus(Duration.ofDays(30)), Duration.ZERO))
+
+        val retried = sender.reset("c-voice")!!
+        assertEquals(CaptureStatus.PENDING, retried.status)
+        assertEquals("c-voice-r1", retried.voiceIdempotencyKey)
+        assertNull(retried.voiceJobId)
+        assertNull(retried.voiceStatus)
+        assertEquals("""{"via":"android-app","timeZone":"Europe/Berlin","captureId":"c-voice","attempt":1}""", retried.sourceMetadataJson)
+
+        // The new attempt's own tries repeat its key and bytes, also in another time zone.
+        api.job = AudioJob(id = "job-2", status = "queued")
+        api.failures += LifeOsException.Server(503, null, "unavailable")
+        assertTrue(sender.send("c-voice") is SendOutcome.Retry)
+        val before = java.util.TimeZone.getDefault()
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"))
+        try {
+            assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        } finally {
+            java.util.TimeZone.setDefault(before)
+        }
+        assertEquals(listOf("c-voice", "c-voice-r1", "c-voice-r1"), api.audioAttempts.map { it.third })
+        assertEquals(retried.sourceMetadataJson, api.audioAttempts[1].second)
+        assertEquals(api.audioAttempts[1].second, api.audioAttempts[2].second)
+        assertEquals("job-2", store.get("c-voice")!!.voiceJobId)
+
+        // That job fails as well: the next Retry is attempt 2.
+        api.job = AudioJob(id = "job-2", status = "expired")
+        checker.refresh("c-voice")
+        assertEquals("c-voice-r2", sender.reset("c-voice")!!.voiceIdempotencyKey)
+    }
+
+    @Test
+    fun `retry of a voice note Voice never accepted keeps its key and metadata`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        repeat(5) { api.failures += LifeOsException.Server(502, null, "bad gateway") }
+        repeat(5) { sender.send("c-voice") }
+        val failed = store.get("c-voice")!!
+        assertEquals(CaptureStatus.FAILED, failed.status)
+        assertTrue(failed.retryable)
+
+        val retried = sender.reset("c-voice")!!
+        assertEquals(0, retried.jobAttempt)
+        assertEquals(failed.sourceMetadataJson, retried.sourceMetadataJson)
+        assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        assertEquals(setOf("c-voice"), api.audioAttempts.map { it.third }.toSet())
+        assertEquals(1, api.audioAttempts.map { it.second }.toSet().size)
+    }
+
+    @Test
+    fun `retry after 409 sends the recording under a new key`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.Api(409, "idempotency_conflict", "The Idempotency-Key was already used with a different upload")
+        sender.send("c-voice")
+        assertTrue(store.get("c-voice")!!.keyConflict)
+        assertEquals("c-voice-r1", sender.reset("c-voice")!!.voiceIdempotencyKey)
+        assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        assertEquals(listOf("c-voice", "c-voice-r1"), api.audioAttempts.map { it.third })
+    }
+
+    @Test
+    fun `retry leaves a sent capture alone`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        sender.send("c-voice")
+        val sent = store.get("c-voice")!!
+        assertFalse(sent.retryable)
+        assertEquals(sent, sender.reset("c-voice"))
+    }
+
+    @Test
     fun `a deleted capture is gone`() = runBlocking {
         setUp()
         assertEquals(SendOutcome.Gone, sender.send("nope"))

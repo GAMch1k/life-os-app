@@ -37,7 +37,8 @@ enum class CaptureStatus {
 /**
  * One capture in the offline queue, from the moment it is made until Life OS
  * has it. [id] is generated on the phone and never changes, so every retry
- * sends the same Inbox dedupe key ([dedupeKey]) and Inbox keeps one item.
+ * sends the same Inbox dedupe key ([dedupeKey]) and Inbox keeps one item. A
+ * voice note's Voice job is keyed by [voiceIdempotencyKey].
  */
 @Serializable
 data class Capture(
@@ -66,14 +67,34 @@ data class Capture(
     val outcome: String? = null,
     val sentAt: String? = null,
     /**
-     * The sourceMetadata JSON, written once when the capture is made and sent
-     * byte for byte on every attempt: Voice refuses a retry whose metadata
-     * differs (409 `idempotency_conflict`). Null only for captures queued by
-     * 0.2.0, which use [sourceMetadata].
+     * The sourceMetadata JSON, written once when the capture is made (and
+     * again when Retry starts a new Voice job attempt) and sent byte for byte
+     * on every try: Voice refuses a retry whose metadata differs (409
+     * `idempotency_conflict`). Null only for captures queued by 0.2.0, which
+     * use [sourceMetadata].
      */
     val sourceMetadataJson: String? = null,
+    /** Which Voice job this voice note asks for: 0 at first, plus 1 for every Retry after the job failed or the key was refused. */
+    val jobAttempt: Int = 0,
+    /** Voice answered 409 `idempotency_conflict`: the key is taken, so Retry needs a new one. */
+    val keyConflict: Boolean = false,
 ) {
     val dedupeKey: String get() = "$DEDUPE_PREFIX$id"
+
+    /**
+     * The voice upload's `Idempotency-Key`: the capture id, then `<id>-r1`,
+     * `<id>-r2`… for later job attempts. Every try of one attempt repeats
+     * it, so a lost reply is answered with the job it created.
+     */
+    val voiceIdempotencyKey: String get() = if (jobAttempt == 0) id else "$id-r$jobAttempt"
+
+    /** A voice note whose Voice job failed or expired before it reached the Inbox; Retry asks for a new job. */
+    val voiceJobFailed: Boolean
+        get() = kind == CaptureKind.VOICE && status == CaptureStatus.SENT && voiceJobId != null &&
+            inboxItemId == null && voiceStatus in FINAL_VOICE_FAILURES
+
+    /** What the queue screen offers Retry for. */
+    val retryable: Boolean get() = status == CaptureStatus.FAILED || voiceJobFailed
 
     /** Sent and nothing more will change on the server side that the app shows. */
     val settled: Boolean
@@ -85,14 +106,43 @@ data class Capture(
     /** The metadata as sent: the stored JSON, or (0.2.0 captures) the same fields encoded now. */
     fun metadataJson(): String = sourceMetadataJson ?: LifeOsJson.encodeToString(JsonObject.serializer(), sourceMetadata())
 
-    /** What the Inbox item's sourceMetadata says about the capture; only stable fields, no attempt counters or times. */
+    /**
+     * What the Inbox item's sourceMetadata says about the capture; only
+     * stable fields, no retry counters or times. A later Voice job attempt
+     * adds `"attempt": n`.
+     */
     fun sourceMetadata(): JsonObject = JsonObject(
-        mapOf(
-            "via" to JsonPrimitive(VIA),
-            "timeZone" to JsonPrimitive(timeZone),
-            "captureId" to JsonPrimitive(id),
-        ),
+        buildMap {
+            put("via", JsonPrimitive(VIA))
+            put("timeZone", JsonPrimitive(timeZone))
+            put("captureId", JsonPrimitive(id))
+            if (jobAttempt > 0) put("attempt", JsonPrimitive(jobAttempt))
+        },
     )
+
+    /**
+     * Retry of a voice note whose job failed, or whose key Voice refused:
+     * the next job attempt, with its own key and metadata (written now), and
+     * nothing left of the old job.
+     */
+    fun nextJobAttempt(): Capture {
+        val next = copy(
+            jobAttempt = jobAttempt + 1,
+            keyConflict = false,
+            status = CaptureStatus.PENDING,
+            attempts = 0,
+            error = null,
+            authProblem = false,
+            voiceJobId = null,
+            voiceStatus = null,
+            voiceError = null,
+            inboxItemId = null,
+            inboxState = null,
+            outcome = null,
+            sentAt = null,
+        )
+        return next.copy(sourceMetadataJson = LifeOsJson.encodeToString(JsonObject.serializer(), next.sourceMetadata()))
+    }
 
     companion object {
         /** A new capture with its metadata fixed now, as every attempt will send it. */
@@ -150,12 +200,16 @@ class CaptureStore(private val store: DataStore<Preferences>) {
         return removed
     }
 
-    /** Removes the sent captures older than [age] (all sent ones for zero) and their files. */
+    /**
+     * Removes the sent captures older than [age] (all sent ones for zero) and
+     * their files. A voice note whose job failed stays, like a failed
+     * capture, until it is retried or deleted.
+     */
     suspend fun pruneSent(now: Instant, age: Duration): Int {
         val removed = mutableListOf<Capture>()
         change { list ->
             list.filterNot { capture ->
-                val old = capture.status == CaptureStatus.SENT &&
+                val old = capture.status == CaptureStatus.SENT && !capture.voiceJobFailed &&
                     Duration.between(Instant.parse(capture.sentAt ?: capture.createdAt), now) >= age
                 old.also { if (it) removed += capture }
             }

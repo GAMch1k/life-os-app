@@ -113,7 +113,7 @@ fun QueueScreen(navigator: Navigator, viewModel: QueueViewModel = viewModel()) {
     Scaffold(
         topBar = {
             BackTopBar("Captures", navigator::back) {
-                if (state.captures.any { it.status == CaptureStatus.SENT }) TextButton(onClick = { viewModel.clearSent() }) { Text("Clear sent") }
+                if (state.captures.any { it.status == CaptureStatus.SENT && !it.voiceJobFailed }) TextButton(onClick = { viewModel.clearSent() }) { Text("Clear sent") }
             }
         },
     ) { padding ->
@@ -147,7 +147,7 @@ fun QueueScreen(navigator: Navigator, viewModel: QueueViewModel = viewModel()) {
 
 @Composable
 private fun CaptureCard(capture: Capture, onRetry: () -> Unit, onDelete: () -> Unit, onOpenInbox: () -> Unit) {
-    val failed = capture.status == CaptureStatus.FAILED
+    val failed = capture.retryable
     Card(
         Modifier.fillMaxWidth(),
         colors = if (failed) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer) else CardDefaults.cardColors(),
@@ -164,11 +164,11 @@ private fun CaptureCard(capture: Capture, onRetry: () -> Unit, onDelete: () -> U
             }
             Text(CaptureStatusText.describe(capture), style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (capture.status == CaptureStatus.FAILED || capture.status == CaptureStatus.PENDING) {
+                if (failed || capture.status == CaptureStatus.PENDING) {
                     TextButton(onClick = onRetry) { Text(if (failed) "Retry" else "Send now") }
                 }
                 if (capture.inboxItemId != null) TextButton(onClick = onOpenInbox) { Text("Open Inbox") }
-                TextButton(onClick = onDelete) { Text(if (capture.status == CaptureStatus.SENT) "Remove" else "Delete") }
+                TextButton(onClick = onDelete) { Text(if (capture.status == CaptureStatus.SENT && !failed) "Remove" else "Delete") }
             }
         }
     }

@@ -19,7 +19,7 @@ import java.time.Instant
 interface CaptureApi {
     suspend fun uploadImage(file: File): String
     suspend fun createInboxItem(request: CreateInboxItem): InboxItem
-    /** [idempotencyKey] is the capture id, the same on every attempt; [sourceMetadataJson] byte-identical too. */
+    /** [idempotencyKey] is the capture's job attempt key, the same on every try of it; [sourceMetadataJson] byte-identical too. */
     suspend fun createAudioJob(file: File, sourceMetadataJson: String, idempotencyKey: String): AudioJob
     suspend fun audioJob(id: String): AudioJob
     suspend fun inboxItem(id: String): InboxItem
@@ -58,8 +58,10 @@ sealed interface SendOutcome {
  * - Photos: each JPEG uploaded once (references are content-addressed and
  *   kept as they arrive), then the capture with the references and the key.
  * - Voice: one Voice job, stored as soon as it exists so it is never uploaded
- *   twice; Voice creates the Inbox item after transcription. Voice has no
- *   idempotency key, so only an upload whose answer was lost can repeat.
+ *   again; Voice creates the Inbox item after transcription. Every try sends
+ *   `Idempotency-Key` ([Capture.voiceIdempotencyKey]) and the stored
+ *   metadata, so when an answer was lost, Voice (BUG-40) returns the job the
+ *   lost try created instead of making a second one.
  */
 class CaptureSender(
     private val store: CaptureStore,
@@ -88,12 +90,14 @@ class CaptureSender(
             throw cancelled
         } catch (error: LifeOsException) {
             val giveUp = !error.retryable || start.attempts >= maxAttempts
-            val message = if (error is LifeOsException.Api && error.code == IDEMPOTENCY_CONFLICT) CONFLICT_MESSAGE else error.message
+            val conflict = error is LifeOsException.Api && error.code == IDEMPOTENCY_CONFLICT
+            val message = if (conflict) CONFLICT_MESSAGE else error.message
             save(id) {
                 it.copy(
                     status = if (giveUp) CaptureStatus.FAILED else CaptureStatus.PENDING,
                     error = message,
                     authProblem = error.authProblem,
+                    keyConflict = conflict,
                 )
             }
             if (giveUp) SendOutcome.Failed(message.orEmpty()) else SendOutcome.Retry(message.orEmpty())
@@ -138,7 +142,7 @@ class CaptureSender(
         if (capture.voiceJobId == null) {
             val file = capture.files.firstOrNull()?.let(::File)
             if (file == null || !file.isFile) throw IOException("the recording is missing")
-            val job = api.createAudioJob(file, capture.metadataJson(), idempotencyKey = capture.id)
+            val job = api.createAudioJob(file, capture.metadataJson(), idempotencyKey = capture.voiceIdempotencyKey)
             save(capture.id) {
                 it.copy(status = CaptureStatus.SENT, error = null, authProblem = false, voiceJobId = job.id, voiceStatus = job.status, sentAt = clock().toString())
             }
@@ -162,9 +166,24 @@ class CaptureSender(
         return ids
     }
 
-    /** The queue screen's Retry. */
-    suspend fun reset(id: String): Capture? =
-        store.update(id) { if (it.status == CaptureStatus.SENT) it else it.copy(status = CaptureStatus.PENDING, attempts = 0, error = null, authProblem = false) }
+    /**
+     * The queue screen's Retry (and Send now).
+     *
+     * - A voice note whose Voice job failed, or whose key Voice refused
+     *   (409): a new job attempt ([Capture.nextJobAttempt]) with the next key
+     *   and its own metadata. The old key would only bring back the failed
+     *   job, or the 409.
+     * - Anything Life OS never accepted (offline, 5xx, a refusal): the same
+     *   key or dedupe key and the same metadata, so if an earlier try did
+     *   arrive and only its answer was lost, no second item or job appears.
+     */
+    suspend fun reset(id: String): Capture? = store.update(id) { capture ->
+        when {
+            capture.voiceJobFailed || (capture.status == CaptureStatus.FAILED && capture.keyConflict) -> capture.nextJobAttempt()
+            capture.status == CaptureStatus.SENT -> capture
+            else -> capture.copy(status = CaptureStatus.PENDING, attempts = 0, error = null, authProblem = false)
+        }
+    }
 
     companion object {
         /** Inbox needs some content; a photo-only capture says what it is, as the Dashboard's share does. */
@@ -172,9 +191,9 @@ class CaptureSender(
 
         const val IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
-        /** 409 idempotency_conflict: Voice holds another upload under this capture's id. */
+        /** 409 idempotency_conflict: Voice holds another upload under this capture's key. */
         const val CONFLICT_MESSAGE =
-            "Voice already holds a different recording under this capture's id (409 idempotency_conflict), so it was not sent again. Delete it and record again."
+            "Voice already holds a different recording under this capture's id (409 idempotency_conflict), so it was not sent again. Retry sends it as a new recording."
     }
 }
 
