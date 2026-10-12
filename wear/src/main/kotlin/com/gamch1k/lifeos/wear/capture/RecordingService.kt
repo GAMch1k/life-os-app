@@ -170,7 +170,7 @@ class RecordingService : Service() {
             return
         }
         val graph = LifeOsWear.graph(this)
-        val capture = Capture(
+        val capture = Capture.create(
             id = recording.id,
             createdAt = recording.startedAtMillis,
             durationMillis = duration,

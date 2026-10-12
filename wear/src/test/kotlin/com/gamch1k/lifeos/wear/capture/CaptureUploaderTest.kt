@@ -201,11 +201,9 @@ class CaptureUploaderTest {
         server.upload = { json(202, """{"id":"job-1","status":"queued"}""") }
         again.run(followFreshJobs = false)
 
-        fun metadata(request: ApiRequest) = request.body!!.toString(Charsets.ISO_8859_1)
-            .substringAfter("name=\"sourceMetadata\"\r\n\r\n").substringBefore("\r\n")
         assertEquals(2, server.uploads.size)
         assertEquals(setOf("c1"), server.uploads.map { it.headers["Idempotency-Key"] }.toSet())
-        assertEquals(1, server.uploads.map(::metadata).toSet().size)
+        assertEquals(1, server.uploads.map { metadata(it) }.toSet().size)
         assertTrue(metadata(server.uploads.first()), "\"recordedAt\"" in metadata(server.uploads.first()))
         assertEquals(CaptureState.SENT, reloaded.get("c1")!!.state)
     }
@@ -221,6 +219,77 @@ class CaptureUploaderTest {
         assertEquals(CaptureState.FAILED, failed.state)
         assertEquals("Voice holds a different recording under this capture's id, so it was not sent again.", failed.message)
         assertEquals(1, server.uploads.size)
+    }
+
+    private fun metadata(request: ApiRequest) = request.body!!.toString(Charsets.ISO_8859_1)
+        .substringAfter("name=\"sourceMetadata\"\r\n\r\n").substringBefore("\r\n")
+
+    @Test
+    fun `retry after a failed transcription asks Voice for a new job under a new key`() = runTest {
+        val server = FakeLifeOs()
+        server.job = { json(200, """{"id":"job-1","status":"failed","errorSummary":"No speech was heard in the recording. Record it again."}""") }
+        val (store, uploader) = setUp(server)
+        record(store)
+        uploader.run(followFreshJobs = true)
+        assertEquals(CaptureState.FAILED, store.get("c1")!!.state)
+
+        // Voice would replay job-1 for the old key; the retry must not send it.
+        store.update("c1") { CaptureMachine.retry(it) }
+        server.upload = { json(503, "") }
+        uploader.run(followFreshJobs = false)
+        now = store.get("c1")!!.nextAttemptAt
+        // The watch restarts before the attempt's next try: same key, same bytes.
+        val reloaded = CaptureStore(store.directory, clock = { now })
+        val again = CaptureUploader(reloaded, LifeOsApi(server), onAuthRefused = {}, clock = { now }, sleep = { now += it })
+        server.upload = { json(202, """{"id":"job-2","status":"queued"}""") }
+        server.job = { json(200, """{"id":"job-2","status":"succeeded","inboxItemId":"inbox-2"}""") }
+        again.run(followFreshJobs = true)
+
+        assertEquals(listOf("c1", "c1-r1", "c1-r1"), server.uploads.map { it.headers["Idempotency-Key"] })
+        val (first, retry, retryAgain) = server.uploads.map { metadata(it) }
+        assertFalse(first, "attempt" in first)
+        assertTrue(retry, retry.endsWith(",\"attempt\":1}"))
+        assertEquals(retry, retryAgain)
+        assertEquals("/api/voice/v1/audio-jobs/job-2", server.requests.last().path)
+        val done = reloaded.get("c1")!!
+        assertEquals(CaptureState.IN_INBOX, done.state)
+        assertEquals("job-2", done.jobId)
+        assertEquals("inbox-2", done.inboxItemId)
+    }
+
+    @Test
+    fun `retry of an upload Voice never answered keeps the key, so a lost reply can't duplicate`() = runTest {
+        val server = FakeLifeOs()
+        server.upload = { json(503, "") }
+        val (store, uploader) = setUp(server)
+        record(store)
+        repeat(CaptureMachine.MAX_ATTEMPTS) {
+            uploader.run(followFreshJobs = false)
+            store.get("c1")!!.takeIf { it.state == CaptureState.QUEUED }?.let { now = it.nextAttemptAt }
+        }
+        assertEquals(CaptureState.FAILED, store.get("c1")!!.state)
+
+        store.update("c1") { CaptureMachine.retry(it) }
+        // The earlier upload had reached Voice after all: it replays that job for the same key.
+        server.upload = { json(202, """{"id":"job-1","status":"processing"}""") }
+        uploader.run(followFreshJobs = false)
+        assertEquals(setOf("c1"), server.uploads.map { it.headers["Idempotency-Key"] }.toSet())
+        assertEquals(1, server.uploads.map { metadata(it) }.toSet().size)
+        assertEquals("job-1", store.get("c1")!!.jobId)
+    }
+
+    @Test
+    fun `retry after 409 sends the recording under a new key`() = runTest {
+        val server = FakeLifeOs()
+        server.upload = { json(409, """{"error":{"code":"idempotency_conflict","message":"taken"}}""") }
+        val (store, uploader) = setUp(server)
+        record(store)
+        uploader.run(followFreshJobs = false)
+        store.update("c1") { CaptureMachine.retry(it) }
+        server.upload = { json(202, """{"id":"job-5","status":"queued"}""") }
+        uploader.run(followFreshJobs = false)
+        assertEquals(listOf("c1", "c1-r1"), server.uploads.map { it.headers["Idempotency-Key"] })
+        assertEquals("job-5", store.get("c1")!!.jobId)
     }
 
     @Test

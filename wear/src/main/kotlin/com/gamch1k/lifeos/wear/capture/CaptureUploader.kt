@@ -7,7 +7,6 @@ import com.gamch1k.lifeos.wear.net.AudioUpload
 import com.gamch1k.lifeos.wear.net.LifeOsApi
 import com.gamch1k.lifeos.wear.net.Route
 import kotlinx.coroutines.delay
-import java.time.Instant
 
 /**
  * Runs the capture queue: uploads every due recording, then follows the
@@ -66,13 +65,11 @@ class CaptureUploader(
         }
         val result = api.uploadAudio(
             AudioUpload(
-                captureId = started.id,
+                idempotencyKey = started.idempotencyKey,
                 bytes = bytes,
                 fileName = file.name,
                 contentType = started.contentType,
-                timeZone = started.timeZone,
-                recordedAt = Instant.ofEpochMilli(started.createdAt),
-                durationMillis = started.durationMillis,
+                sourceMetadataJson = started.metadataJson(),
             ),
         )
         val outcome = uploadOutcome(result)
@@ -105,14 +102,12 @@ class CaptureUploader(
                     }
                 }
                 HttpOutcome.AUTH, HttpOutcome.RETRYABLE -> UploadOutcome.Retryable(LifeOsApi.describe(result))
-                HttpOutcome.PERMANENT -> UploadOutcome.Rejected(
-                    when (result.status) {
-                        413 -> "The recording is too long for Voice."
-                        // Voice honours Idempotency-Key (BUG-40): the key is taken by another upload.
-                        409 -> "Voice holds a different recording under this capture's id, so it was not sent again."
-                        else -> LifeOsApi.describe(result)
-                    },
-                )
+                // 409 idempotency_conflict (BUG-40): another upload holds this key, so Retry takes a new one.
+                HttpOutcome.PERMANENT -> if (result.status == 409) {
+                    UploadOutcome.Rejected("Voice holds a different recording under this capture's id, so it was not sent again.", keyTaken = true)
+                } else {
+                    UploadOutcome.Rejected(if (result.status == 413) "The recording is too long for Voice." else LifeOsApi.describe(result))
+                }
             }
         }
 

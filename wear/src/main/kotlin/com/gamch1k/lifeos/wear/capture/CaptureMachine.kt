@@ -11,8 +11,11 @@ sealed interface UploadOutcome {
     /** Life OS answered, but a retry may work (5xx, 429, a refused token). */
     data class Retryable(val message: String) : UploadOutcome
 
-    /** Life OS refused this recording (400 unsupported audio, 413 too large). */
-    data class Rejected(val message: String) : UploadOutcome
+    /**
+     * Life OS refused this recording (400 unsupported audio, 413 too large),
+     * or ([keyTaken]) Voice holds another upload under its key (409).
+     */
+    data class Rejected(val message: String, val keyTaken: Boolean = false) : UploadOutcome
 }
 
 /** What polling the Voice job found. */
@@ -28,10 +31,11 @@ sealed interface JobOutcome {
  * The upload queue's state machine, without Android: every transition is a
  * pure function from a [Capture] to the next one. [CaptureUploader] runs it.
  *
- * Idempotency: a capture with a job is never uploaded again, a stale
- * outcome (for a capture that moved on meanwhile) changes nothing, and every
- * attempt sends the capture id as `Idempotency-Key`, so the phone replays a
- * write whose reply got lost (core's RelayReplayCache).
+ * Idempotency (docs/wear.md, "Idempotency"): a capture with a job is never
+ * uploaded again, a stale outcome (for a capture that moved on meanwhile)
+ * changes nothing, and every upload of one job attempt sends the same
+ * `Idempotency-Key` and metadata, so Voice (and the phone's RelayReplayCache)
+ * answer a retry whose first reply got lost with the job it created.
  */
 object CaptureMachine {
     /** Retryable failures before a capture is FAILED; "unreachable" never counts against it. */
@@ -93,7 +97,12 @@ object CaptureMachine {
                     message = outcome.message,
                 )
             }
-            is UploadOutcome.Rejected -> capture.copy(state = CaptureState.FAILED, uploadStartedAt = null, message = outcome.message)
+            is UploadOutcome.Rejected -> capture.copy(
+                state = CaptureState.FAILED,
+                uploadStartedAt = null,
+                message = outcome.message,
+                keyConflict = outcome.keyTaken,
+            )
         }
     }
 
@@ -109,18 +118,39 @@ object CaptureMachine {
         }
     }
 
-    /** The owner's Retry: FAILED → QUEUED, from scratch. A failed job is replaced by a new upload. */
+    /**
+     * The owner's Retry: FAILED (or WAITING) → QUEUED, with fresh retries.
+     *
+     * - Voice made a job and it failed (no speech, transcription failed,
+     *   expired, gone), or Voice holds another upload under the key (409):
+     *   a new job attempt, with the next key (`<id>-r<n>`) and its own
+     *   metadata, written now. The old key would only bring back the failed
+     *   job, or the 409.
+     * - Voice never accepted it (no way to Life OS, 5xx, a refused token, a
+     *   refusal): the same key and metadata, so if an earlier upload did
+     *   reach Voice and only its reply was lost, the retry gets that job
+     *   instead of a second one.
+     */
     fun retry(capture: Capture): Capture? {
         if (capture.state != CaptureState.FAILED && capture.state != CaptureState.WAITING) return null
-        return capture.copy(
+        val again = capture.copy(
             state = CaptureState.QUEUED,
             attempts = 0,
             waits = 0,
             nextAttemptAt = 0,
-            jobId = null,
-            sentAt = null,
             uploadStartedAt = null,
             message = null,
+        )
+        if (capture.state != CaptureState.FAILED || (capture.jobId == null && !capture.keyConflict)) return again
+        val attempt = capture.jobAttempt + 1
+        return again.copy(
+            jobAttempt = attempt,
+            sourceMetadataJson = capture.buildSourceMetadataJson(attempt),
+            keyConflict = false,
+            jobId = null,
+            sentAt = null,
+            route = null,
+            inboxItemId = null,
         )
     }
 

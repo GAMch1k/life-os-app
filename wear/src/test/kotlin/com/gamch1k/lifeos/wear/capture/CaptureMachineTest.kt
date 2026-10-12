@@ -115,19 +115,79 @@ class CaptureMachineTest {
         assertFalse(CaptureMachine.shouldPoll(sent, 11_000 + CaptureMachine.POLL_WINDOW_MILLIS))
     }
 
+    private fun failedJob(capture: Capture = queued, now: Long = 10_000) = CaptureMachine.onJobOutcome(
+        CaptureMachine.onUploadOutcome(CaptureMachine.startUpload(capture, now)!!, UploadOutcome.Accepted("job-1", "phone"), now + 1_000),
+        JobOutcome.Failed("No speech was heard in the recording. Record it again."),
+    )
+
     @Test
     fun `retry starts a failed capture from scratch, and only a failed or waiting one`() {
-        val failedJob = CaptureMachine.onJobOutcome(
-            CaptureMachine.onUploadOutcome(sending(), UploadOutcome.Accepted("job-1", "phone"), 11_000),
-            JobOutcome.Failed("Transcription failed."),
-        )
-        val retried = CaptureMachine.retry(failedJob)!!
+        val retried = CaptureMachine.retry(failedJob())!!
         assertEquals(CaptureState.QUEUED, retried.state)
         assertNull(retried.jobId)
+        assertNull(retried.sentAt)
+        assertNull(retried.message)
         assertEquals(0, retried.attempts)
         assertTrue(CaptureMachine.isDue(retried, 0))
         assertNull(CaptureMachine.retry(queued))
         assertNull(CaptureMachine.retry(sending()))
+    }
+
+    @Test
+    fun `retry after a failed job is a new job attempt with a new key and its own metadata`() {
+        val first = CaptureMachine.retry(failedJob())!!
+        assertEquals(1, first.jobAttempt)
+        assertEquals("c1-r1", first.idempotencyKey)
+        assertEquals(
+            """{"via":"wear-app","timeZone":"Europe/Berlin","captureId":"c1","recordedAt":"1970-01-01T00:00:01Z","durationMs":4000,"attempt":1}""",
+            first.sourceMetadataJson,
+        )
+        // That attempt's own retries keep its key and metadata.
+        val retried = CaptureMachine.onUploadOutcome(CaptureMachine.startUpload(first, 20_000)!!, UploadOutcome.Retryable("503"), 20_000)
+        assertEquals("c1-r1", retried.idempotencyKey)
+        assertEquals(first.sourceMetadataJson, retried.metadataJson())
+        // Its job fails too: the next Retry is attempt 2.
+        val second = CaptureMachine.retry(failedJob(first, 60_000))!!
+        assertEquals("c1-r2", second.idempotencyKey)
+        assertTrue(second.metadataJson().endsWith(",\"attempt\":2}"))
+    }
+
+    @Test
+    fun `retry of a capture Voice never accepted keeps its key and metadata`() {
+        var capture = Capture.create("c1", 1_000, 4_000, "c1.ogg", "audio/ogg", "Europe/Berlin")
+        var now = 0L
+        repeat(CaptureMachine.MAX_ATTEMPTS) {
+            capture = CaptureMachine.onUploadOutcome(CaptureMachine.startUpload(capture, now)!!, UploadOutcome.Retryable("503"), now)
+            now = capture.nextAttemptAt
+        }
+        assertEquals(CaptureState.FAILED, capture.state)
+        val retried = CaptureMachine.retry(capture)!!
+        assertEquals(0, retried.jobAttempt)
+        assertEquals("c1", retried.idempotencyKey)
+        assertEquals(capture.sourceMetadataJson, retried.sourceMetadataJson)
+        // Waiting for the phone, and a refusal, keep the key too.
+        val waiting = CaptureMachine.onUploadOutcome(sending(), UploadOutcome.Unreachable("no phone"), 11_000)
+        assertEquals("c1", CaptureMachine.retry(waiting)!!.idempotencyKey)
+        val refused = CaptureMachine.onUploadOutcome(sending(), UploadOutcome.Rejected("unsupported audio"), 11_000)
+        assertEquals("c1", CaptureMachine.retry(refused)!!.idempotencyKey)
+    }
+
+    @Test
+    fun `retry after Voice refused the key (409) takes a new one`() {
+        val conflict = CaptureMachine.onUploadOutcome(sending(), UploadOutcome.Rejected("taken", keyTaken = true), 11_000)
+        assertTrue(conflict.keyConflict)
+        val retried = CaptureMachine.retry(conflict)!!
+        assertEquals("c1-r1", retried.idempotencyKey)
+        assertFalse(retried.keyConflict)
+    }
+
+    @Test
+    fun `the first attempt's metadata is exactly what 0 3 0 sent, stored or not`() {
+        val made = Capture.create("c1", 1_000, 4_000, "c1.ogg", "audio/ogg", "Europe/Berlin")
+        val json = """{"via":"wear-app","timeZone":"Europe/Berlin","captureId":"c1","recordedAt":"1970-01-01T00:00:01Z","durationMs":4000}"""
+        assertEquals(json, made.sourceMetadataJson)
+        assertEquals(json, queued.metadataJson()) // queued by 0.3.0: nothing stored
+        assertEquals("c1", made.idempotencyKey)
     }
 
     @Test

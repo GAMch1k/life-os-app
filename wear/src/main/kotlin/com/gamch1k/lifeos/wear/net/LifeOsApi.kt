@@ -11,12 +11,16 @@ import java.time.ZoneId
 class LifeOsApi(private val transport: ApiTransport) {
     suspend fun execute(request: ApiRequest): ApiResult = transport.execute(request)
 
-    /** `POST /api/voice/v1/audio-jobs`; the capture id is the Idempotency-Key, unchanged across retries. */
+    /**
+     * `POST /api/voice/v1/audio-jobs`. Voice honours `Idempotency-Key`
+     * (BUG-40): a repeat with the same key, audio, source and metadata gets
+     * the job the first upload created, the same key with anything else 409.
+     */
     suspend fun uploadAudio(upload: AudioUpload): ApiResult {
         val multipart = Multipart.build(
             fields = listOf(
                 "source" to "watch",
-                "sourceMetadata" to upload.sourceMetadataJson(),
+                "sourceMetadata" to upload.sourceMetadataJson,
             ),
             file = Multipart.File(name = "audio", fileName = upload.fileName, contentType = upload.contentType, bytes = upload.bytes),
         )
@@ -27,7 +31,7 @@ class LifeOsApi(private val transport: ApiTransport) {
                 headers = mapOf(
                     "Content-Type" to multipart.contentType,
                     "Accept" to "application/json",
-                    "Idempotency-Key" to upload.captureId,
+                    "Idempotency-Key" to upload.idempotencyKey,
                 ),
                 body = multipart.body,
                 timeoutMillis = 120_000,
@@ -104,25 +108,33 @@ class LifeOsApi(private val transport: ApiTransport) {
     }
 }
 
-/** One recording to upload. */
+/** One upload of a recording: one try of a capture's current job attempt. */
 class AudioUpload(
-    val captureId: String,
+    /** The capture's current key ([com.gamch1k.lifeos.wear.capture.Capture.idempotencyKey]). */
+    val idempotencyKey: String,
     val bytes: ByteArray,
     val fileName: String,
     val contentType: String,
-    val timeZone: String,
-    val recordedAt: Instant,
-    val durationMillis: Long,
-) {
-    /** The multipart field `sourceMetadata`: a JSON object, kept with the job (Voice stores it as given). */
-    fun sourceMetadataJson(): String = LifeOsApi.json.encodeToString(
-        SourceMetadata.serializer(),
-        SourceMetadata(via = "wear-app", timeZone = timeZone, captureId = captureId, recordedAt = recordedAt.toString(), durationMs = durationMillis),
-    )
-}
+    /** The multipart field `sourceMetadata`, sent as given: a JSON object Voice keeps with the job. */
+    val sourceMetadataJson: String,
+)
 
+/** A watch recording's `sourceMetadata`. [attempt] is absent on the first job attempt. */
 @Serializable
-class SourceMetadata(val via: String, val timeZone: String, val captureId: String, val recordedAt: String, val durationMs: Long)
+class SourceMetadata(
+    val via: String,
+    val timeZone: String,
+    val captureId: String,
+    val recordedAt: String,
+    val durationMs: Long,
+    val attempt: Int? = null,
+) {
+    fun toJson(): String = LifeOsApi.json.encodeToString(serializer(), this)
+
+    companion object {
+        const val VIA = "wear-app"
+    }
+}
 
 @Serializable
 class ErrorEnvelope(val error: ErrorBody? = null)
