@@ -115,6 +115,10 @@ verify_and_copy() { # <module> -> prints the release.json entry
   cert=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certs" | tr 'a-f' 'A-F')
   [[ $signers == 1 ]] || die "$apk has $signers signers, expected exactly one"
   [[ $cert == "$expected_cert_sha256" ]] || die "$apk is signed with $cert, not the release key"
+  # The phone and the watch find each other by this array, which Play services
+  # reads by name; resource shrinking removed it once (0.4.0).
+  aapt2 dump resources "$apk" | grep -q 'array/android_wear_capabilities' \
+    || die "$apk lacks array/android_wear_capabilities (res/raw/keep.xml must keep it)"
 
   dest="dist/lifeos-$module-$version_name-$version_code.apk"
   cp "$apk" "$dest"

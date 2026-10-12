@@ -10,6 +10,7 @@ import com.gamch1k.lifeos.core.wearlink.WatchInfo
 import com.gamch1k.lifeos.core.wearlink.WatchInfoRequest
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateCodec
 import com.gamch1k.lifeos.core.wearlink.WearLink
+import com.gamch1k.lifeos.core.wearlink.WearNodes
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
@@ -38,8 +39,7 @@ class WatchLink(context: Context) {
 
     /** The watch with the Life OS app (capability [WearLink.CAPABILITY_WATCH]), a nearby one first; null when none is reachable. */
     suspend fun watchNode(): String? = try {
-        val nodes = capabilities.getCapability(WearLink.CAPABILITY_WATCH, CapabilityClient.FILTER_REACHABLE).await().nodes
-        (nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull())?.id
+        WearNodes.find(appContext, WearLink.CAPABILITY_WATCH).firstOrNull()?.id
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {

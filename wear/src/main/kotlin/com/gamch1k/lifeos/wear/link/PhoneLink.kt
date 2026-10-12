@@ -6,6 +6,7 @@ import com.gamch1k.lifeos.core.wearlink.CredentialsRequest
 import com.gamch1k.lifeos.core.wearlink.RelayCodec
 import com.gamch1k.lifeos.core.wearlink.RelayErrorCode
 import com.gamch1k.lifeos.core.wearlink.WearLink
+import com.gamch1k.lifeos.core.wearlink.WearNodes
 import com.gamch1k.lifeos.wear.net.PhoneConnection
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
@@ -42,16 +43,14 @@ class PhoneLink(context: Context, private val store: CredentialStore) : PhoneCon
      */
     override suspend fun phoneNodeId(): String? {
         cachedNode?.let { (id, at) -> if (System.currentTimeMillis() - at < NODE_CACHE_MILLIS) return id }
-        val nodes = capabilities.getCapability(WearLink.CAPABILITY_PHONE, CapabilityClient.FILTER_REACHABLE).await().nodes
-        val node = nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull()
+        val node = WearNodes.find(appContext, WearLink.CAPABILITY_PHONE).firstOrNull()
         cachedNode = node?.let { it.id to System.currentTimeMillis() }
         return node?.id
     }
 
     /** The display name of the phone [phoneNodeId] would use, for the Connection screen. */
     suspend fun phoneName(): String? {
-        val nodes = capabilities.getCapability(WearLink.CAPABILITY_PHONE, CapabilityClient.FILTER_REACHABLE).await().nodes
-        return (nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull())?.displayName
+        return WearNodes.find(appContext, WearLink.CAPABILITY_PHONE).firstOrNull()?.displayName
     }
 
     /** Forget the cached phone, after it failed or the capability changed. */

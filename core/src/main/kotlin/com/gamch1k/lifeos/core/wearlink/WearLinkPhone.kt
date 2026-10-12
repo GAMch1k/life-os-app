@@ -19,10 +19,7 @@ object WearLinkPhone {
     suspend fun notifyTodayChanged(context: Context): Int = broadcast(context, WearLink.PATH_TODAY_CHANGED)
 
     private suspend fun broadcast(context: Context, path: String): Int = try {
-        val nodes = Wearable.getCapabilityClient(context)
-            .getCapability(WearLink.CAPABILITY_WATCH, CapabilityClient.FILTER_REACHABLE)
-            .await()
-            .nodes
+        val nodes = WearNodes.find(context, WearLink.CAPABILITY_WATCH)
         val messages = Wearable.getMessageClient(context)
         nodes.count { node ->
             try {
