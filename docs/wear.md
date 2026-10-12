@@ -79,19 +79,28 @@ body             header.bodyLength bytes, raw (audio stays binary)
 
 ### Idempotency
 
-Voice honours `Idempotency-Key` on `POST /v1/audio-jobs` since BUG-40: the same key with the same audio, `source` and `sourceMetadata` (compared as JSON) returns the job the first upload created (202); the same key with anything else is 409 `idempotency_conflict`.
+Voice honours `Idempotency-Key` on `POST /v1/audio-jobs` since BUG-40: the same key with the same audio, `source` and `sourceMetadata` (compared as JSON) returns the job the first upload created (202), in whatever state it is now, failed included; the same key with anything else is 409 `idempotency_conflict`.
 
-- Every upload carries the capture's id, made when recording starts, as `Idempotency-Key` and as `sourceMetadata.captureId`. The metadata is built only from the persisted capture (id, `createdAt`, time zone, duration), never from the attempt, so every retry sends the same JSON, also after a restart (`CaptureUploaderTest`). A 409 fails the capture with "Voice holds a different recording under this capture's id".
+- A capture asks Voice for one job at a time, its **job attempt**. Every upload of an attempt carries the attempt's key: the capture's id (made when recording starts) for the first attempt, then `<capture id>-r1`, `<capture id>-r2`… `sourceMetadata.captureId` is always the capture's id; later attempts add `"attempt": n`.
+- The metadata JSON is written once when the attempt starts (`Capture.sourceMetadataJson`) and sent byte for byte on every upload of it, also after a restart (`CaptureUploaderTest`). It holds only persisted fields (id, `createdAt`, time zone, duration), never anything from the upload. Captures queued by 0.3.0 have nothing stored; their first attempt builds the very JSON 0.3.0 sent.
 - A capture with a Voice job is never uploaded again; each upload is claimed under the queue's lock; an outcome for a capture that moved on is ignored.
-- The phone keeps the reply of every write with a key for 15 minutes (`RelayReplayCache`), so a retry through the phone is answered without even reaching Voice. A retry while the first try still runs waits for it.
-- The owner's **Retry** uploads again with the same key, so for a capture whose job exists (a transcription without speech) Voice returns that same job.
+- The phone keeps the successful (2xx) reply of every relayed write with a key for 15 minutes (`RelayReplayCache`), so a retry through the phone is answered without even reaching Voice; a retry while the first try still runs waits for it. Other replies (5xx, 429, a refused token, a refusal) are not kept, so a retry really runs again.
+- The owner's **Retry** on a failed capture:
+
+| Why it failed | Retry |
+|---|---|
+| Voice made a job and it failed: "No speech was heard…", a transcription that failed after Voice's own retries, expired, or a job Voice no longer knows | A **new job attempt**: the next key and its own metadata. The old key would only bring back the failed job. |
+| Voice answered 409: another upload holds the key | A new job attempt too: the old key can never be used for this recording. |
+| Voice never accepted it: no way to Life OS, 5xx, 429, a refused token, out of retries, a refusal (400, 413), an unreadable 202 | The **same key and metadata**: if an earlier upload did reach Voice and only its reply was lost, the retry gets that job, not a second one. |
+
+The phone app's Captures screen follows the same rules (`Capture.voiceIdempotencyKey`, `CaptureSender.reset`): **Retry** on a voice note whose job failed ("Transcription failed…") or that got a 409 starts a new job attempt; any other Retry keeps the key.
 
 Completing a task sends one key per tap (`complete:<uuid>`), so a lost reply is replayed while a later tap on a reopened task still completes it.
 
 ## Voice capture
 
 - **Recording** (`RecordingService`): Ogg/Opus, mono, 16 kHz, 24 kbit/s, which Voice accepts as is; MP4/AAC if the watch can't encode Opus. At most five minutes, then it sends by itself; under 0.8 s nothing is sent. A foreground service of type microphone, so the recording goes on when the screen dims; the screen stays on while the recording screen shows. Its "Recording" notice appears only if notifications are allowed for Life OS (the app doesn't ask); recording works either way.
-- **Upload**: `POST /api/voice/v1/audio-jobs`, multipart with `audio` (`<capture id>.ogg`, `audio/ogg`), `source=watch` and `sourceMetadata={"via":"wear-app","timeZone":"Europe/Berlin","captureId":…,"recordedAt":…,"durationMs":…}`.
+- **Upload**: `POST /api/voice/v1/audio-jobs`, multipart with `audio` (`<capture id>.ogg`, `audio/ogg`), `source=watch` and `sourceMetadata={"via":"wear-app","timeZone":"Europe/Berlin","captureId":…,"recordedAt":…,"durationMs":…}` (plus `"attempt":n` from the second job attempt on), with the attempt's `Idempotency-Key`.
 - **The queue** (`CaptureMachine`, persisted in `files/captures/queue.json` with the recordings beside it):
 
 | State | Shown as | Next |
@@ -101,7 +110,7 @@ Completing a task sends one key per tap (`complete:<uuid>`), so a lost reply is 
 | `waiting` | Waiting for phone | Neither the phone nor a direct connection reached Life OS. Tried again after 30 s, 1, 2, 4, 8, then every 10 minutes, and at once when the phone app comes back or hands over a token. Never gives up. |
 | `sent` | Sent · transcribing | Voice accepted it. The job is polled for about 2.5 minutes after the upload, then once with every Today refresh, for a day. |
 | `in_inbox` | In Inbox | Done; the audio is deleted. Kept in the list for three days. |
-| `failed` | Failed · tap to retry | Refused (400 unsupported audio, 413 too large), out of retries (6 tries over about 15 minutes for 5xx, 429 and a refused token), or the transcription failed ("No speech was heard…"). **Retry** starts it again as a new upload. |
+| `failed` | Failed · tap to retry | Refused (400 unsupported audio, 413 too large, 409 key taken), out of retries (6 tries over about 15 minutes for 5xx, 429 and a refused token), or the transcription failed ("No speech was heard…"). **Retry** queues it again with fresh retries: as a new job attempt when Voice's job failed or the key was taken, else under the same key ([Idempotency](#idempotency)). |
 
 Long-press a capture on Home to delete it.
 
@@ -164,9 +173,10 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
 ## Tests and build
 
 - `tools/build test` runs every module's unit tests, including:
-  - `core/…/wearlink/`: the frame codec (round trips, limits, truncation, versions, wire names), the relay policy, the phone's handler (credentials, relayed reads and writes, error codes, the channel, too-large replies, the replay cache);
+  - `core/…/wearlink/`: the frame codec (round trips, limits, truncation, versions, wire names), the relay policy, the phone's handler (credentials, relayed reads and writes, error codes, the channel, too-large replies, the replay cache, which replays successes only);
+  - `core/…/capture/`: the phone's queue, including Retry: a new job attempt after a failed Voice job or a 409, the same key otherwise;
   - `wear/…/net/`: the watch's relay against the phone's real handler, end to end, and the routing rules;
-  - `wear/…/capture/`: the queue's state machine and idempotency, and the uploader against a fake Life OS (the multipart body, polling to In Inbox, waiting, backoff, refusals, a refused token, a restart);
+  - `wear/…/capture/`: the queue's state machine and idempotency (job attempts, their keys and metadata, Retry), and the uploader against a fake Life OS (the multipart body, polling to In Inbox, waiting, backoff, refusals, a refused token, a restart, Retry after a failed job, a 409 or a lost reply);
   - `wear/…/today/`: parsing, the date-only rule, the tile's rows, the timeline change times, the complication's timeline, and the repository's queries and cache.
 - `tools/build` builds the signed `lifeos-wear-<version>.apk` (about 15 MB: embedded Cronet's native code for two ABIs is 11 MB of it).
 
