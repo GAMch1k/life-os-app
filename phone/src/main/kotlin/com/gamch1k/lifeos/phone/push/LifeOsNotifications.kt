@@ -36,7 +36,14 @@ import java.util.concurrent.TimeUnit
  * never setLocalOnly, one group with a summary, and Done on a Task.
  */
 object LifeOsNotifications {
-    const val CHANNEL_HIGH = "lifeos.high"
+    // Android fixes a channel's sound and vibration when it is created, so the
+    // urgent channel with the long vibration has a new id; the first one
+    // ("lifeos.high", default vibration) is deleted.
+    const val CHANNEL_HIGH = "lifeos.urgent"
+    private val RETIRED_CHANNELS = listOf("lifeos.high")
+
+    /** Long and strong, like ntfy's max priority: about 5 seconds of buzzing. */
+    val URGENT_VIBRATION = longArrayOf(0, 1000, 400, 1000, 400, 1000, 400, 1000)
     const val CHANNEL_MEDIUM = "lifeos.medium"
     const val CHANNEL_LOW = "lifeos.low"
     private const val GROUP = "lifeos"
@@ -47,10 +54,14 @@ object LifeOsNotifications {
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        RETIRED_CHANNELS.forEach(manager::deleteNotificationChannel)
         manager.createNotificationChannels(
             listOf(
                 NotificationChannel(CHANNEL_HIGH, "Urgent", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Something is broken or needs action now."
+                    description = "Something is broken or needs action now. Long vibration."
+                    enableVibration(true)
+                    vibrationPattern = URGENT_VIBRATION
+                    enableLights(true)
                 },
                 NotificationChannel(CHANNEL_MEDIUM, "Reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "Task and event reminders, captures that need you."
