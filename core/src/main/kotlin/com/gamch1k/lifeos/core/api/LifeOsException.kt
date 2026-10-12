@@ -62,6 +62,11 @@ sealed class LifeOsException(message: String, cause: Throwable? = null) : Except
         override val retryable get() = true
     }
 
+    /** A problem on the phone itself, e.g. no space left for a download. */
+    class Local(detail: String, cause: Throwable? = null) : LifeOsException("On this phone: $detail", cause) {
+        override val retryable get() = false
+    }
+
     /** The answer was not what the API promises (e.g. a web page instead of JSON). */
     class Protocol(detail: String, cause: Throwable? = null) : LifeOsException("Unexpected answer from Life OS: $detail", cause) {
         override val retryable get() = false

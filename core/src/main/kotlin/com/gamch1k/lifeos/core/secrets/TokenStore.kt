@@ -38,15 +38,21 @@ class ServiceToken(val clientId: String, val clientSecret: String) {
         }
 
         /**
-         * The values as pasted, surrounding whitespace removed. Null when either
-         * is empty or contains whitespace (a paste that caught more than the value).
+         * The values as pasted, surrounding whitespace (and invisible characters
+         * such as a zero-width space) removed. Null when either is empty or has
+         * anything but visible ASCII inside: an HTTP header cannot carry it, and
+         * Cloudflare's IDs and secrets never contain it.
          */
         fun parse(clientId: String, clientSecret: String): ServiceToken? {
-            val id = clientId.trim()
-            val secret = clientSecret.trim()
-            if (id.isEmpty() || secret.isEmpty() || id.any(Char::isWhitespace) || secret.any(Char::isWhitespace)) return null
+            val id = clean(clientId)
+            val secret = clean(clientSecret)
+            if (id.isEmpty() || secret.isEmpty() || !id.all(::visibleAscii) || !secret.all(::visibleAscii)) return null
             return ServiceToken(id, secret)
         }
+
+        private fun visibleAscii(char: Char) = char in '!'..'~'
+
+        private fun clean(value: String) = value.trim { it.isWhitespace() || it == '\u200B' || it == '\uFEFF' || it == '\u200C' || it == '\u200D' }
     }
 }
 
@@ -122,6 +128,10 @@ class KeystoreCipher(private val alias: String = "lifeos-service-token") : Secre
  * Nothing here logs.
  */
 class TokenStore(private val store: DataStore<Preferences>, private val cipher: SecretCipher) {
+    /** The last ciphertext opened and its result, so a request costs no Keystore work. */
+    @Volatile
+    private var opened: Pair<List<String?>, Connection?>? = null
+
     /** The current connection, or null when the phone is not set up (or the key was lost). */
     val connection: Flow<Connection?> = store.data.map(::open)
 
@@ -151,6 +161,14 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     }
 
     private fun open(preferences: Preferences): Connection? {
+        val sealed = listOf(preferences[SERVER_URL], preferences[CLIENT_ID], preferences[CLIENT_SECRET])
+        opened?.let { (key, connection) -> if (key == sealed) return connection }
+        val connection = decrypt(preferences)
+        opened = sealed to connection
+        return connection
+    }
+
+    private fun decrypt(preferences: Preferences): Connection? {
         val id = preferences[CLIENT_ID] ?: return null
         val secret = preferences[CLIENT_SECRET] ?: return null
         val url = preferences[SERVER_URL] ?: ServerUrl.DEFAULT

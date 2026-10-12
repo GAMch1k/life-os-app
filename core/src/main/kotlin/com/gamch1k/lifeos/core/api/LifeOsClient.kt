@@ -206,6 +206,8 @@ class LifeOsClient(
                 error
             } catch (error: TransportException) {
                 mapTransport(error)
+            } catch (error: java.io.IOException) {
+                LifeOsException.Local(error.message ?: error.javaClass.simpleName, error)
             }
             if (!idempotent || !failure.retryable || attempt >= retryDelaysMillis.size) throw failure
             sleep(retryDelaysMillis[attempt++])
@@ -286,6 +288,7 @@ class LifeOsClient(
             is TransportException.Network -> LifeOsException.Offline(error.detail, error.offline, error)
             is TransportException.Timeout -> LifeOsException.Timeout(error.millis / 1000)
             is TransportException.TooLarge -> LifeOsException.Protocol(error.message ?: "too large", error)
+            is TransportException.Local -> LifeOsException.Local(error.message ?: "unknown error", error)
         }
     }
 }

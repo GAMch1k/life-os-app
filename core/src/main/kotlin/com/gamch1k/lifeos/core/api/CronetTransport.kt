@@ -41,15 +41,21 @@ class CronetTransport(
                         result.fold({ continuation.resume(it) }, { continuation.resumeWithException(it) })
                     }
                 }
-                val builder = engine.newUrlRequestBuilder(request.url, callback, executor)
-                    .setHttpMethod(request.method)
-                    .disableCache()
-                request.headers.forEach { (name, value) -> builder.addHeader(name, value) }
-                request.body?.let { body ->
-                    builder.addHeader("Content-Type", body.contentType)
-                    builder.setUploadDataProvider(StreamUpload(body), executor)
+                val urlRequest = try {
+                    val builder = engine.newUrlRequestBuilder(request.url, callback, executor)
+                        .setHttpMethod(request.method)
+                        .disableCache()
+                    request.headers.forEach { (name, value) -> builder.addHeader(name, value) }
+                    request.body?.let { body ->
+                        builder.addHeader("Content-Type", body.contentType)
+                        builder.setUploadDataProvider(StreamUpload(body), executor)
+                    }
+                    builder.build()
+                } catch (error: IllegalArgumentException) {
+                    // A malformed URL or header value: nothing was sent.
+                    continuation.resumeWithException(TransportException.Local("the request could not be built: ${error.message}", error))
+                    return@suspendCancellableCoroutine
                 }
-                val urlRequest = builder.build()
                 continuation.invokeOnCancellation { urlRequest.cancel() }
                 urlRequest.start()
             }
@@ -76,7 +82,7 @@ class CronetTransport(
             try {
                 if (info.httpStatusCode in 200..299) output = sink?.open(info.httpStatusCode, headersOf(info))
             } catch (error: Exception) {
-                failure = error
+                failure = TransportException.Local("could not save the answer: ${error.message}", error)
                 request.cancel()
                 return
             }
@@ -95,8 +101,12 @@ class CronetTransport(
                     if (memory.size() + chunk.size > memoryLimit) throw TransportException.TooLarge(memoryLimit)
                     memory.write(chunk)
                 }
-            } catch (error: Exception) {
+            } catch (error: TransportException) {
                 failure = error
+                request.cancel()
+                return
+            } catch (error: Exception) {
+                failure = TransportException.Local("could not save the answer: ${error.message}", error)
                 request.cancel()
                 return
             }
@@ -108,7 +118,7 @@ class CronetTransport(
 
         override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
             val closed = runCatching { output?.close() }
-            closed.exceptionOrNull()?.let { done(Result.failure(it)); return }
+            closed.exceptionOrNull()?.let { done(Result.failure(TransportException.Local("could not save the answer: ${it.message}", it))); return }
             done(Result.success(HttpResponse(info.httpStatusCode, headersOf(info), memory.toByteArray())))
         }
 
@@ -163,8 +173,11 @@ class CronetTransport(
     companion object {
         /** The app's one engine: embedded Cronet, built-in DNS (ECH), no QUIC. */
         fun create(context: Context): CronetTransport {
-            val engine = CronetEngines.build(context.applicationContext, CronetEngines.Provider.EMBEDDED, quicAllowed = false)
-                ?: error("the embedded Cronet provider is not available")
+            val engine = try {
+                CronetEngines.build(context.applicationContext, CronetEngines.Provider.EMBEDDED, quicAllowed = false)
+            } catch (error: RuntimeException) {
+                throw TransportException.Local("the network stack (Cronet) did not start: ${error.message}", error)
+            } ?: throw TransportException.Local("the network stack (Cronet) is not available")
             return CronetTransport(engine)
         }
 

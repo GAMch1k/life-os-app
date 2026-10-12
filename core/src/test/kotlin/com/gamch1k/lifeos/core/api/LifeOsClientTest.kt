@@ -166,6 +166,24 @@ class LifeOsClientTest {
     }
 
     @Test
+    fun `a failure on the phone (disk full) is a local error, not a crash`() {
+        transport.fail(TransportException.Local("could not save the answer: ENOSPC"))
+        val error = expect<LifeOsException.Local> { client.updateManifest() }
+        assertTrue(error.message!!.contains("ENOSPC"))
+        assertFalse(error.retryable)
+    }
+
+    @Test
+    fun `a stray IOException from the transport is mapped too`() {
+        val failing = object : HttpTransport {
+            override suspend fun execute(request: HttpRequest, sink: ResponseSink?, onProgress: ((Long) -> Unit)?): HttpResponse =
+                throw java.io.FileNotFoundException("updates/x.part")
+        }
+        val client = LifeOsClient(failing, { FakeTransport.CONNECTION }, "ua", sleep = {})
+        expect<LifeOsException.Local> { client.updateManifest() }
+    }
+
+    @Test
     fun `a timeout is reported in seconds`() {
         repeat(3) { transport.fail(TransportException.Timeout(30_000)) }
         assertEquals(30, expect<LifeOsException.Timeout> { client.openTasksDueBefore(Instant.EPOCH) }.seconds)

@@ -83,4 +83,7 @@ sealed class TransportException(message: String, cause: Throwable? = null) : IOE
 
     /** The answer was larger than the client keeps in memory. */
     class TooLarge(val limit: Long) : TransportException("the answer is larger than $limit bytes")
+
+    /** Something on the phone failed: writing a download, reading an upload, starting the engine. */
+    class Local(detail: String, cause: Throwable? = null) : TransportException(detail, cause)
 }

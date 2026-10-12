@@ -3,7 +3,10 @@ package com.gamch1k.lifeos.phone.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
@@ -25,8 +28,9 @@ sealed interface Screen {
 
 /** Moves between screens; the back stack is a plain list (Navigation 3). */
 class Navigator(private val stack: SnapshotStateList<Screen>) {
+    /** A double tap opens the screen once. */
     fun go(screen: Screen) {
-        stack.add(screen)
+        if (stack.lastOrNull() != screen) stack.add(screen)
     }
 
     fun back() {
@@ -40,9 +44,42 @@ class Navigator(private val stack: SnapshotStateList<Screen>) {
     }
 }
 
+/**
+ * Keeps the back stack across process death. A voice recording cannot
+ * survive its process, so the Voice screen is not brought back.
+ */
+private val StackSaver = listSaver<SnapshotStateList<Screen>, String>(
+    save = { stack -> stack.mapNotNull(::encode) },
+    restore = { saved -> saved.mapNotNull(::decode).ifEmpty { null }?.toMutableStateList() },
+)
+
+private fun encode(screen: Screen): String? = when (screen) {
+    is Screen.Onboarding -> "onboarding:${screen.firstRun}"
+    Screen.Home -> "home"
+    Screen.TextCapture -> "text"
+    Screen.VoiceCapture -> null
+    is Screen.PhotoCapture -> "photo:${screen.camera}"
+    Screen.Queue -> "queue"
+    Screen.Settings -> "settings"
+    Screen.NetworkCheck -> "network-check"
+}
+
+private fun decode(saved: String): Screen? = when {
+    saved.startsWith("onboarding:") -> Screen.Onboarding(saved.endsWith("true"))
+    saved == "home" -> Screen.Home
+    saved == "text" -> Screen.TextCapture
+    saved.startsWith("photo:") -> Screen.PhotoCapture(saved.endsWith("true"))
+    saved == "queue" -> Screen.Queue
+    saved == "settings" -> Screen.Settings
+    saved == "network-check" -> Screen.NetworkCheck
+    else -> null
+}
+
 @Composable
 fun AppRoot(startSignedIn: Boolean) {
-    val stack = remember { mutableStateListOf<Screen>(if (startSignedIn) Screen.Home else Screen.Onboarding(firstRun = true)) }
+    val stack = rememberSaveable(saver = StackSaver) {
+        mutableStateListOf<Screen>(if (startSignedIn) Screen.Home else Screen.Onboarding(firstRun = true))
+    }
     val navigator = remember { Navigator(stack) }
     NavDisplay(
         backStack = stack,

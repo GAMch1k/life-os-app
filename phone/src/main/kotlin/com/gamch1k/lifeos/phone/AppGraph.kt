@@ -3,6 +3,7 @@ package com.gamch1k.lifeos.phone
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
@@ -25,6 +26,7 @@ import com.gamch1k.lifeos.core.secrets.TokenStore
 import com.gamch1k.lifeos.core.today.TodaySnapshot
 import com.gamch1k.lifeos.phone.capture.CaptureQueue
 import com.gamch1k.lifeos.phone.update.UpdateManager
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,8 +39,15 @@ import kotlinx.coroutines.withContext
 
 /** The app's singletons, built once in [LifeOsApp]. */
 class AppGraph(private val app: Application) {
-    /** Work that must outlive a screen (completing a Task, starting an update). */
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Work that must outlive a screen (completing a Task, starting an update).
+     * A failure there is logged, never a crash; messages never hold the token.
+     */
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error ->
+            Log.w("LifeOS", "background task failed: ${error.javaClass.simpleName}: ${error.message}")
+        },
+    )
 
     private val settings: DataStore<Preferences> = store("settings")
     private val queueData: DataStore<Preferences> = store("captures")

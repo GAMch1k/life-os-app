@@ -93,6 +93,24 @@ class TokenStoreTest {
     }
 
     @Test
+    fun `a new token replaces the old one at once`() = runBlocking {
+        val store = TokenStore(stores.create(), FakeCipher())
+        store.save(ServerUrl.DEFAULT, token)
+        assertEquals(token.clientId, store.current()!!.token.clientId)
+        store.save(ServerUrl.DEFAULT, ServiceToken("other.access", "other-secret"))
+        assertEquals("other.access", store.current()!!.token.clientId)
+        assertEquals("other-secret", store.current()!!.token.clientSecret)
+    }
+
+    @Test
+    fun `invisible characters around a paste are dropped, inside it they are refused`() {
+        assertEquals("abc.access", ServiceToken.parse("\u200Babc.access\uFEFF", "s")!!.clientId)
+        assertNull(ServiceToken.parse("abc\u200B.access", "s"))
+        assertNull(ServiceToken.parse("abc.access", "sec\u0007ret"))
+        assertNull(ServiceToken.parse("abc.access", "sécret"))
+    }
+
+    @Test
     fun `pasted values are trimmed, and a paste with spaces inside is refused`() {
         val parsed = ServiceToken.parse("  abc.access\n", "\tsecret ")!!
         assertEquals("abc.access", parsed.clientId)
