@@ -131,7 +131,7 @@ The app asks for the server (default `https://lifeos.gamch1k.com`) and a Cloudfl
 1. Cloudflare dashboard → Zero Trust → **Access controls → Service credentials → Service Tokens → Create Service Token**. Name it `life-os-phone`, pick a duration, **Generate token**, and copy the Client ID (it ends in `.access`) and the Client Secret, which Cloudflare shows only once.
 2. **Access controls → Policies → Add a policy**: Action **Service Auth**, Include → **Service Token** → `life-os-phone`, **Save**.
 3. **Access controls → Applications → Life OS → Configure → Policies → Select existing policies**, tick the new policy, **Confirm**, **Save**. Service Auth policies are evaluated before the owner's Allow policy, which keeps working.
-4. In the app: paste both values, **Test connection** (`GET /api/tasks/v1/tasks?limit=1`), **Save and continue**.
+4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`) and, when Life OS answers, saves it and opens Today.
 
 To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) removes the token, the cached Today and the queue from the phone.
 

@@ -95,7 +95,8 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         return url to token
     }
 
-    fun test() {
+    /** Tests the connection; [onPassed] runs after a passed test (the screen saves then). */
+    fun test(onPassed: (() -> Unit)? = null) {
         val (url, token) = parsed() ?: return
         state.update { it.copy(testing = true, message = null) }
         viewModelScope.launch {
@@ -109,6 +110,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                         messageIsError = false,
                     )
                 }
+                onPassed?.invoke()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: LifeOsException) {
@@ -137,7 +139,11 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     val testedCurrent: Boolean
         get() = state.value.let { current ->
             val url = ServerUrl.normalize(current.server)
-            current.tested == Triple(url, current.clientId.trim(), current.clientSecret.trim())
+            // Compare what the test actually used: ServiceToken.parse cleans
+            // more than trim() (zero-width characters a pasted value can
+            // carry), so trim() alone made a passed test look stale.
+            val token = ServiceToken.parse(current.clientId, current.clientSecret)
+            token != null && current.tested == Triple(url, token.clientId, token.clientSecret)
         }
 }
 
@@ -196,11 +202,18 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(onClick = viewModel::test, enabled = !state.testing && !state.saving) { Text("Test connection") }
+                // A passed test saves and continues by itself; the second button
+                // stays for saving after a test that failed only for being offline.
                 Button(
-                    onClick = { viewModel.save { navigator.reset(Screen.Home) } },
-                    enabled = !state.testing && !state.saving && (testedCurrent || state.canSaveUntested),
-                ) { Text(if (testedCurrent) "Save and continue" else "Save anyway") }
+                    onClick = { viewModel.test(onPassed = { viewModel.save { navigator.reset(Screen.Home) } }) },
+                    enabled = !state.testing && !state.saving,
+                ) { Text("Connect") }
+                if (testedCurrent || state.canSaveUntested) {
+                    OutlinedButton(
+                        onClick = { viewModel.save { navigator.reset(Screen.Home) } },
+                        enabled = !state.testing && !state.saving,
+                    ) { Text(if (testedCurrent) "Save and continue" else "Save anyway") }
+                }
                 if (state.testing || state.saving) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
             }
 
