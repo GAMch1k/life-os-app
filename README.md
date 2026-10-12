@@ -140,7 +140,7 @@ To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) rem
 ### How it talks to Life OS
 
 - `core/…/api/LifeOsClient.kt` over `CronetTransport`: the embedded Cronet with the built-in DNS resolver (ECH), no QUIC, redirects never followed.
-- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.4.0 (6)`.
+- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.4.0 (7)`.
 - Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads, voice uploads with an `Idempotency-Key`) are retried twice on errors that may pass.
 - The token is encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
 - For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the phone's token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a token or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
