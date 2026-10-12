@@ -75,6 +75,8 @@ fun RecordScreen(viewModel: WearViewModel, onDone: () -> Unit) {
 
     LaunchedEffect(granted) {
         if (!granted && !asked) permission.launch(Manifest.permission.RECORD_AUDIO)
+        // A result the owner swiped away from last time must not end this recording before it starts.
+        Recorder.acknowledge()
         if (granted && Recorder.state.value is RecorderState.Idle) Recorder.start(context)
     }
 
