@@ -72,6 +72,15 @@ class WearViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val mutableHighlight = MutableStateFlow<String?>(null)
+
+    /** The item Today marks and scrolls to (TodayLayout.eventHighlight, taskHighlight): opened from the complication or the tile. */
+    val highlighted: StateFlow<String?> = mutableHighlight.asStateFlow()
+
+    fun highlight(key: String?) {
+        mutableHighlight.value = key
+    }
+
     fun askToComplete(taskId: String, title: String) {
         mutableCompletion.value = Completion(taskId, title)
     }

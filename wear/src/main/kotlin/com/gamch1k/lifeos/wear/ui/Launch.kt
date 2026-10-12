@@ -6,7 +6,8 @@ import android.content.Intent
 sealed interface Launch {
     data object Record : Launch
 
-    data object Today : Launch
+    /** Today, with [highlight] (TodayLayout.eventHighlight or taskHighlight) marked and scrolled to. */
+    data class Today(val highlight: String? = null) : Launch
 
     data class CompleteTask(val taskId: String, val title: String) : Launch
 
@@ -14,6 +15,7 @@ sealed interface Launch {
         const val EXTRA_ACTION = "com.gamch1k.lifeos.wear.ACTION"
         const val EXTRA_TASK_ID = "com.gamch1k.lifeos.wear.TASK_ID"
         const val EXTRA_TASK_TITLE = "com.gamch1k.lifeos.wear.TASK_TITLE"
+        const val EXTRA_HIGHLIGHT = "com.gamch1k.lifeos.wear.HIGHLIGHT"
         const val RECORD = "record"
         const val TODAY = "today"
         const val COMPLETE_TASK = "complete-task"
@@ -26,7 +28,7 @@ sealed interface Launch {
             if (intent.component?.className == CAPTURE_ALIAS) return Record
             return when (intent.getStringExtra(EXTRA_ACTION)) {
                 RECORD -> Record
-                TODAY -> Today
+                TODAY -> Today(intent.getStringExtra(EXTRA_HIGHLIGHT))
                 COMPLETE_TASK -> intent.getStringExtra(EXTRA_TASK_ID)?.let { CompleteTask(it, intent.getStringExtra(EXTRA_TASK_TITLE) ?: "") }
                 else -> null
             }

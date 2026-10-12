@@ -117,7 +117,8 @@ class TodayLayoutTest {
 
     @Test
     fun `empty, missing and old data say so`() {
-        assertEquals("Open Life OS to load today", TodayLayout.model(null, now, berlin, 3).emptyText)
+        assertEquals("Open Life OS to load Today", TodayLayout.model(null, now, berlin, 3).emptyText)
+        assertEquals("Phone not reachable", TodayLayout.model(null, now, berlin, 3, error = "Phone not reachable").footer)
         val empty = TodayLayout.model(snapshot(), now, berlin, 3)
         assertEquals("Nothing left today", empty.emptyText)
         assertNull(empty.footer)

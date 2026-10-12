@@ -43,8 +43,18 @@ object TodayLayout {
     /** Data older than this is labelled with its time. */
     val STALE_AFTER: Duration = Duration.ofHours(2)
 
-    fun model(snapshot: TodaySnapshot?, now: Instant, zone: ZoneId, maxRows: Int, use24Hour: Boolean = true): TodayTileModel {
-        if (snapshot == null) return TodayTileModel(emptyList(), "Open Life OS to load today", null)
+    /** Shown when nothing has been fetched yet. */
+    const val NOT_LOADED = "Open Life OS to load Today"
+
+    /** Shown when the tile could not be built at all; tapping it opens the app. */
+    const val BROKEN = "Today couldn't be shown. Tap to open Life OS."
+
+    /**
+     * What the tile shows at [now]. [error] is the last refresh's problem,
+     * shown under [NOT_LOADED] while there is no cached day.
+     */
+    fun model(snapshot: TodaySnapshot?, now: Instant, zone: ZoneId, maxRows: Int, use24Hour: Boolean = true, error: String? = null): TodayTileModel {
+        if (snapshot == null) return TodayTileModel(emptyList(), NOT_LOADED, error?.let { elide(it, 60) })
         val events = upcomingEvents(snapshot, now, zone, use24Hour)
         val tasks = tasks(snapshot, now, zone, use24Hour)
         if (events.isEmpty() && tasks.isEmpty()) {
@@ -119,6 +129,16 @@ object TodayLayout {
             .take(max)
             .map(Instant::ofEpochMilli)
     }
+
+    /** What Today highlights when opened from the complication or the tile (Launch.EXTRA_HIGHLIGHT): an event by its key. */
+    fun eventHighlight(key: String) = "event:$key"
+
+    /** A task by its id. */
+    fun taskHighlight(id: String) = "task:$id"
+
+    /** [text] cut to [max] characters, with an ellipsis when cut. */
+    fun elide(text: String, max: Int): String =
+        if (text.length <= max) text else text.take(maxOf(1, max - 1)).trimEnd() + "…"
 
     fun clock(instant: Instant, zone: ZoneId, use24Hour: Boolean): String =
         instant.atZone(zone).format(if (use24Hour) H24 else H12)

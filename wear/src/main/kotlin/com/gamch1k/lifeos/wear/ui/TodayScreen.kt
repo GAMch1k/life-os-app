@@ -1,14 +1,18 @@
 package com.gamch1k.lifeos.wear.ui
 
 import android.text.format.DateFormat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -33,7 +37,11 @@ import com.gamch1k.lifeos.wear.today.TodayRow
 import java.time.Instant
 import java.time.ZoneId
 
-/** Today: the events still ahead (today and tomorrow) and the tasks due; tap a task to mark it done. */
+/**
+ * Today: the events still ahead (today and tomorrow) and the tasks due; tap a
+ * task to mark it done. The item the complication or the tile was showing is
+ * outlined and scrolled to.
+ */
 @Composable
 fun TodayScreen(viewModel: WearViewModel) {
     val snapshot by viewModel.today.collectAsStateWithLifecycle()
@@ -46,6 +54,22 @@ fun TodayScreen(viewModel: WearViewModel) {
     val events = snapshot?.let { TodayLayout.upcomingEvents(it, now, zone, use24Hour) }.orEmpty()
     val tasks = snapshot?.let { TodayLayout.tasks(it, now, zone, use24Hour) }.orEmpty()
     val listState = rememberTransformingLazyColumnState()
+    val highlighted by viewModel.highlighted.collectAsStateWithLifecycle()
+    // The header is item 0, then the tasks, then the events.
+    val highlightIndex = highlighted?.let { key ->
+        val task = tasks.indexOfFirst { TodayLayout.taskHighlight(it.id) == key }
+        val event = events.indexOfFirst { TodayLayout.eventHighlight(it.key) == key }
+        when {
+            task >= 0 -> 1 + task
+            event >= 0 -> 1 + tasks.size + event
+            else -> null
+        }
+    }
+    LaunchedEffect(highlighted, highlightIndex) {
+        if (highlightIndex != null) listState.animateScrollToItem(highlightIndex)
+    }
+    DisposableEffect(Unit) { onDispose { viewModel.highlight(null) } }
+    val outline = BorderStroke(2.dp, MaterialTheme.colorScheme.tertiary)
 
     ScreenScaffold(
         scrollState = listState,
@@ -58,13 +82,17 @@ fun TodayScreen(viewModel: WearViewModel) {
         TransformingLazyColumn(state = listState, contentPadding = contentPadding) {
             item { ListHeader { Text(stringResource(R.string.today)) } }
             if (tasks.isNotEmpty()) {
-                items(tasks, key = { "task:" + it.id }) { task -> TaskButton(task) { viewModel.askToComplete(task.id, task.title) } }
+                items(tasks, key = { "task:" + it.id }) { task ->
+                    val border = outline.takeIf { highlighted == TodayLayout.taskHighlight(task.id) }
+                    TaskButton(task, border) { viewModel.askToComplete(task.id, task.title) }
+                }
             }
             items(events, key = { "event:" + it.key }) { event ->
                 Button(
                     onClick = {},
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.filledTonalButtonColors(),
+                    border = outline.takeIf { highlighted == TodayLayout.eventHighlight(event.key) },
                     label = { Text(event.title, maxLines = 2) },
                     secondaryLabel = { Text(event.time) },
                 )
@@ -91,11 +119,12 @@ fun TodayScreen(viewModel: WearViewModel) {
 }
 
 @Composable
-private fun TaskButton(task: TodayRow.Task, onClick: () -> Unit) {
+private fun TaskButton(task: TodayRow.Task, border: BorderStroke?, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         colors = if (task.overdue) ButtonDefaults.filledVariantButtonColors() else ButtonDefaults.buttonColors(),
+        border = border,
         icon = { Icon(painterResource(R.drawable.ic_check), contentDescription = null) },
         label = { Text(task.title, maxLines = 2) },
         secondaryLabel = { Text(task.due) },

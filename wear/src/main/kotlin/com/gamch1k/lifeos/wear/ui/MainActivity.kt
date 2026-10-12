@@ -78,7 +78,10 @@ private fun WearApp(viewModel: WearViewModel, launch: Pair<Launch, Long>?, onLau
                         viewModel.finishAfterRecording = true
                         navController.navigate(Routes.RECORD) { launchSingleTop = true }
                     }
-                    Launch.Today -> navController.navigate(Routes.TODAY) { launchSingleTop = true }
+                    is Launch.Today -> {
+                        viewModel.highlight(request.highlight)
+                        navController.navigate(Routes.TODAY) { launchSingleTop = true }
+                    }
                     is Launch.CompleteTask -> {
                         viewModel.askToComplete(request.taskId, request.title)
                         navController.navigate(Routes.TODAY) { launchSingleTop = true }
