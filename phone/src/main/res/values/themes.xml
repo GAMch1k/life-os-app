@@ -2,4 +2,12 @@
 <resources>
     <!-- Only the window before Compose draws; Compose's MaterialTheme does the rest. -->
     <style name="Theme.LifeOS" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- The share sheet: a see-through window under Compose's bottom sheet. -->
+    <style name="Theme.LifeOS.Share" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>
