@@ -16,9 +16,12 @@ coreKtx = "1.19.1"
 lifecycle = "2.11.0"
 coroutines = "1.11.0"
 cronet = "500.1.0"      # bundles Chromium 155.0.8059.16
+serialization = "1.11.0"
+datastore = "1.2.1"
+browser = "1.10.0"
+navigation3 = "1.2.0"
 junit = "4.13.2"
 # The phone–watch link and the watch app (Phase 19)
-kotlinxSerialization = "1.11.0"
 playServicesWearable = "20.0.1"
 wearTiles = "1.6.2"
 wearProtolayout = "1.4.2"
@@ -44,7 +47,6 @@ wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", v
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
-kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 # Wear OS Data Layer (MessageClient, ChannelClient, CapabilityClient)
 play-services-wearable = { module = "com.google.android.gms:play-services-wearable", version.ref = "playServicesWearable" }
@@ -55,6 +57,16 @@ wear-protolayout = { module = "androidx.wear.protolayout:protolayout", version.r
 wear-protolayout-material3 = { module = "androidx.wear.protolayout:protolayout-material3", version.ref = "wearProtolayout" }
 wear-complications-data-source-ktx = { module = "androidx.wear.watchface:watchface-complications-data-source-ktx", version.ref = "wearComplications" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# Chrome Custom Tabs: the Dashboard opens in Chrome, which has the Access login and ECH.
+androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
+androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycle" }
+compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
 
 # Embedded Cronet: the whole Chromium network stack inside the APK
 # (cronet-embedded is now an empty alias of cronet-bundled).

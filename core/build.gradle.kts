@@ -21,13 +21,15 @@ android {
 
 dependencies {
     implementation(libs.cronet.bundled)
-    implementation(libs.kotlinx.coroutines.android)
+    api(libs.kotlinx.coroutines.android)
+    // The client's DTOs and the stores are part of core's API for the apps.
+    api(libs.kotlinx.serialization.json)
+    api(libs.androidx.datastore.preferences)
 
     // The phone–watch link (core/…/wearlink): both apps talk over the Wear OS
     // Data Layer, so its API is part of core's.
     api(libs.play.services.wearable)
     api(libs.kotlinx.coroutines.play.services)
-    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
