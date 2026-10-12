@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider shares: only the camera's output directory, so the camera app can write a photo. -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>
