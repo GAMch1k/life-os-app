@@ -141,12 +141,35 @@ class LifeOsClientTest {
     }
 
     @Test
-    fun `a voice upload is never retried by the client`() {
+    fun `a voice upload without a key is never retried by the client`() {
         val audio = temp.newFile("voice.ogg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         transport.html(502)
-        expect<LifeOsException.Server> { client.createAudioJob(audio, "audio/ogg", "web", JsonObject(emptyMap())) }
+        expect<LifeOsException.Server> { client.createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = null) }
         assertEquals(1, transport.requests.size)
         assertTrue(sleeps.isEmpty())
+        assertFalse(transport.requests.single().headers.containsKey("Idempotency-Key"))
+    }
+
+    @Test
+    fun `a voice upload with a key sends it and is retried with the same body fields`() = runBlocking {
+        val audio = temp.newFile("voice.ogg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        transport.html(502).json(202, """{"id":"j1","status":"queued","source":"web","attemptCount":0,"createdAt":"x","updatedAt":"x"}""")
+        val metadata = """{"via":"android-app","timeZone":"Europe/Berlin","captureId":"c-1"}"""
+        val job = client.createAudioJob(audio, "audio/ogg", "web", metadata, idempotencyKey = "c-1")
+        assertEquals("j1", job.id)
+        assertEquals(2, transport.requests.size)
+        assertTrue(transport.requests.all { it.headers["Idempotency-Key"] == "c-1" })
+        val fields = transport.bodies.map { body -> body!!.text().substringAfter("name=\"sourceMetadata\"\r\n\r\n").substringBefore("\r\n") }
+        assertEquals(listOf(metadata, metadata), fields)
+    }
+
+    @Test
+    fun `409 idempotency_conflict is a refusal, not retried`() {
+        val audio = temp.newFile("voice.ogg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        transport.json(409, """{"error":{"code":"idempotency_conflict","message":"The Idempotency-Key was already used with a different upload"}}""")
+        val error = expect<LifeOsException.Api> { client.createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = "c-1") }
+        assertEquals("idempotency_conflict", error.code)
+        assertEquals(1, transport.requests.size)
     }
 
     @Test

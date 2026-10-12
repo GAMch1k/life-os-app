@@ -65,6 +65,13 @@ data class Capture(
     /** What processing did, e.g. "created a Task". */
     val outcome: String? = null,
     val sentAt: String? = null,
+    /**
+     * The sourceMetadata JSON, written once when the capture is made and sent
+     * byte for byte on every attempt: Voice refuses a retry whose metadata
+     * differs (409 `idempotency_conflict`). Null only for captures queued by
+     * 0.2.0, which use [sourceMetadata].
+     */
+    val sourceMetadataJson: String? = null,
 ) {
     val dedupeKey: String get() = "$DEDUPE_PREFIX$id"
 
@@ -75,7 +82,10 @@ data class Capture(
                 (inboxItemId == null && voiceStatus in FINAL_VOICE_FAILURES)
             )
 
-    /** What the Inbox item's sourceMetadata says about the capture. */
+    /** The metadata as sent: the stored JSON, or (0.2.0 captures) the same fields encoded now. */
+    fun metadataJson(): String = sourceMetadataJson ?: LifeOsJson.encodeToString(JsonObject.serializer(), sourceMetadata())
+
+    /** What the Inbox item's sourceMetadata says about the capture; only stable fields, no attempt counters or times. */
     fun sourceMetadata(): JsonObject = JsonObject(
         mapOf(
             "via" to JsonPrimitive(VIA),
@@ -85,6 +95,20 @@ data class Capture(
     )
 
     companion object {
+        /** A new capture with its metadata fixed now, as every attempt will send it. */
+        fun create(
+            id: String,
+            kind: CaptureKind,
+            createdAt: String,
+            timeZone: String,
+            text: String = "",
+            files: List<String> = emptyList(),
+            durationMillis: Long? = null,
+        ): Capture {
+            val capture = Capture(id = id, kind = kind, createdAt = createdAt, timeZone = timeZone, text = text, files = files, durationMillis = durationMillis)
+            return capture.copy(sourceMetadataJson = LifeOsJson.encodeToString(JsonObject.serializer(), capture.sourceMetadata()))
+        }
+
         const val VIA = "android-app"
         const val DEDUPE_PREFIX = "android-app:"
 

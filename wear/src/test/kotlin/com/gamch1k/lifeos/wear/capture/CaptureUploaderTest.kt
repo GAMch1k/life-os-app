@@ -188,6 +188,42 @@ class CaptureUploaderTest {
     }
 
     @Test
+    fun `every retry sends the same key and byte-identical metadata, also after a restart`() = runTest {
+        val server = FakeLifeOs()
+        server.upload = { json(503, "") }
+        val (store, uploader) = setUp(server)
+        record(store)
+        uploader.run(followFreshJobs = false)
+        now = store.get("c1")!!.nextAttemptAt
+        // The watch restarts in between: the queue comes back from disk.
+        val reloaded = CaptureStore(store.directory, clock = { now })
+        val again = CaptureUploader(reloaded, LifeOsApi(server), onAuthRefused = {}, clock = { now }, sleep = { now += it })
+        server.upload = { json(202, """{"id":"job-1","status":"queued"}""") }
+        again.run(followFreshJobs = false)
+
+        fun metadata(request: ApiRequest) = request.body!!.toString(Charsets.ISO_8859_1)
+            .substringAfter("name=\"sourceMetadata\"\r\n\r\n").substringBefore("\r\n")
+        assertEquals(2, server.uploads.size)
+        assertEquals(setOf("c1"), server.uploads.map { it.headers["Idempotency-Key"] }.toSet())
+        assertEquals(1, server.uploads.map(::metadata).toSet().size)
+        assertTrue(metadata(server.uploads.first()), "\"recordedAt\"" in metadata(server.uploads.first()))
+        assertEquals(CaptureState.SENT, reloaded.get("c1")!!.state)
+    }
+
+    @Test
+    fun `409 idempotency_conflict is a final refusal with a clear message`() = runTest {
+        val server = FakeLifeOs()
+        server.upload = { json(409, """{"error":{"code":"idempotency_conflict","message":"The Idempotency-Key was already used with a different upload"}}""") }
+        val (store, uploader) = setUp(server)
+        record(store)
+        uploader.run(followFreshJobs = false)
+        val failed = store.get("c1")!!
+        assertEquals(CaptureState.FAILED, failed.state)
+        assertEquals("Voice holds a different recording under this capture's id, so it was not sent again.", failed.message)
+        assertEquals(1, server.uploads.size)
+    }
+
+    @Test
     fun `the owner's retry sends a failed recording again`() = runTest {
         val server = FakeLifeOs()
         server.upload = { json(400, """{"error":{"code":"unsupported_audio","message":"Audio must be a WAV, WebM, Ogg, or MP4 recording"}}""") }

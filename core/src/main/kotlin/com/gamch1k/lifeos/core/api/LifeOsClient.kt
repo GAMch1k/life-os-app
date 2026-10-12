@@ -5,7 +5,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.net.URI
 import java.net.URLEncoder
@@ -110,18 +109,30 @@ class LifeOsClient(
 
     /**
      * `POST /v1/audio-jobs`: stores the recording and queues its
-     * transcription. Not idempotent (Voice has no idempotency key), so it is
-     * never retried here.
+     * transcription. With an [idempotencyKey] (Voice honours
+     * `Idempotency-Key`, BUG-40) a repeat of the same upload returns the job
+     * the first one created, so the call is retried like any idempotent one.
+     * [sourceMetadataJson] is sent byte for byte as given: Voice answers 409
+     * `idempotency_conflict` when a retry's metadata differs.
      */
-    suspend fun createAudioJob(file: File, contentType: String, source: String, sourceMetadata: JsonObject): AudioJob {
+    suspend fun createAudioJob(file: File, contentType: String, source: String, sourceMetadataJson: String, idempotencyKey: String?): AudioJob {
         val body = MultipartBody(
             listOf(
                 MultipartBody.Part.file("audio", file.name, contentType, file),
                 MultipartBody.Part.text("source", source),
-                MultipartBody.Part.text("sourceMetadata", LifeOsJson.encodeToString(JsonObject.serializer(), sourceMetadata)),
+                MultipartBody.Part.text("sourceMetadata", sourceMetadataJson),
             ),
         )
-        return send("POST", "/api/voice/v1/audio-jobs", body, AudioJob.serializer(), idempotent = false, timeoutMillis = uploadTimeout(body.contentLength))
+        val response = exchange(
+            "POST",
+            "/api/voice/v1/audio-jobs",
+            emptyList(),
+            body,
+            idempotent = idempotencyKey != null,
+            extraHeaders = idempotencyKey?.let { mapOf("Idempotency-Key" to it) } ?: emptyMap(),
+            timeoutMillis = uploadTimeout(body.contentLength),
+        )
+        return decode("/api/voice/v1/audio-jobs", response, AudioJob.serializer())
     }
 
     suspend fun audioJob(id: String): AudioJob = get("/api/voice/v1/audio-jobs/${segment(id)}", emptyList(), AudioJob.serializer())

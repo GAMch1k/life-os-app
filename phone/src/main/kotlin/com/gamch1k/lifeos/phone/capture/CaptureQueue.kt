@@ -42,7 +42,7 @@ class CaptureQueue(context: Context, private val store: CaptureStore, private va
 
     suspend fun add(id: String, kind: CaptureKind, text: String = "", files: List<File> = emptyList(), durationMillis: Long? = null) {
         store.add(
-            Capture(
+            Capture.create(
                 id = id,
                 kind = kind,
                 createdAt = Instant.now().toString(),

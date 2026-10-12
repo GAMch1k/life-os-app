@@ -33,7 +33,9 @@ class CaptureSenderTest {
     private class FakeApi : CaptureApi {
         val uploads = mutableListOf<String>()
         val captures = mutableListOf<CreateInboxItem>()
-        val audioUploads = mutableListOf<Pair<String, JsonObject>>()
+        /** Every voice upload attempt: file, metadata JSON as sent, Idempotency-Key. */
+        val audioUploads = mutableListOf<Triple<String, String, String>>()
+        val audioAttempts = mutableListOf<Triple<String, String, String>>()
         val failures = ArrayDeque<LifeOsException?>()
         var job = AudioJob(id = "job-1", status = "queued")
         var item = InboxItem(id = "item-1", state = "raw")
@@ -55,9 +57,10 @@ class CaptureSenderTest {
             return item
         }
 
-        override suspend fun createAudioJob(file: File, sourceMetadata: JsonObject): AudioJob {
+        override suspend fun createAudioJob(file: File, sourceMetadataJson: String, idempotencyKey: String): AudioJob {
+            audioAttempts += Triple(file.name, sourceMetadataJson, idempotencyKey)
             maybeFail()
-            audioUploads += file.name to sourceMetadata
+            audioUploads += Triple(file.name, sourceMetadataJson, idempotencyKey)
             return job
         }
 
@@ -76,7 +79,7 @@ class CaptureSenderTest {
         sender = CaptureSender(store, api, clock = { now }, maxAttempts = 5)
     }
 
-    private fun capture(kind: CaptureKind, text: String = "", files: List<File> = emptyList()) = Capture(
+    private fun capture(kind: CaptureKind, text: String = "", files: List<File> = emptyList()) = Capture.create(
         id = "c-${kind.name.lowercase()}",
         kind = kind,
         createdAt = now.toString(),
@@ -144,7 +147,8 @@ class CaptureSenderTest {
         assertEquals(SendOutcome.Sent, sender.send("c-voice"))
         assertEquals(SendOutcome.Sent, sender.send("c-voice"))
         assertEquals(1, api.audioUploads.size)
-        assertEquals(JsonPrimitive("android-app"), api.audioUploads.single().second["via"])
+        assertEquals("""{"via":"android-app","timeZone":"Europe/Berlin","captureId":"c-voice"}""", api.audioUploads.single().second)
+        assertEquals("c-voice", api.audioUploads.single().third)
         assertTrue(api.captures.isEmpty())
         val sent = store.get("c-voice")!!
         assertEquals("job-1", sent.voiceJobId)
@@ -201,8 +205,8 @@ class CaptureSenderTest {
         setUp()
         store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
         val cancelling = object : CaptureApi by api {
-            override suspend fun createAudioJob(file: File, sourceMetadata: JsonObject): AudioJob {
-                val job = api.createAudioJob(file, sourceMetadata)
+            override suspend fun createAudioJob(file: File, sourceMetadataJson: String, idempotencyKey: String): AudioJob {
+                val job = api.createAudioJob(file, sourceMetadataJson, idempotencyKey)
                 currentCoroutineContext().cancel()
                 return job
             }
@@ -226,6 +230,50 @@ class CaptureSenderTest {
         assertEquals(CaptureStatus.SENDING, store.get("c-text")!!.status)
         worker.cancelAndJoin()
         assertEquals(CaptureStatus.PENDING, store.get("c-text")!!.status)
+    }
+
+    @Test
+    fun `every voice retry sends the capture id as key and byte-identical metadata`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.Offline("ERR_CONNECTION_RESET (-101)", noNetwork = false)
+        api.failures += LifeOsException.Server(503, null, "unavailable")
+        assertTrue(sender.send("c-voice") is SendOutcome.Retry)
+        assertTrue(sender.send("c-voice") is SendOutcome.Retry)
+        // The phone moved to another time zone meanwhile: the stored metadata still wins.
+        val before = java.util.TimeZone.getDefault()
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"))
+        try {
+            assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        } finally {
+            java.util.TimeZone.setDefault(before)
+        }
+        assertEquals(3, api.audioAttempts.size)
+        assertEquals(1, api.audioAttempts.map { it.second }.toSet().size)
+        assertEquals(setOf("c-voice"), api.audioAttempts.map { it.third }.toSet())
+        assertEquals(store.get("c-voice")!!.sourceMetadataJson, api.audioAttempts.first().second)
+    }
+
+    @Test
+    fun `a stored capture keeps its metadata JSON exactly`() = runBlocking {
+        setUp()
+        val made = Capture.create("c-1", CaptureKind.TEXT, "2026-10-12T10:00:00Z", "Europe/Berlin", text = "x")
+        store.add(made)
+        assertEquals(made.sourceMetadataJson, store.get("c-1")!!.sourceMetadataJson)
+        assertEquals("""{"via":"android-app","timeZone":"Europe/Berlin","captureId":"c-1"}""", made.metadataJson())
+        // A capture queued by 0.2.0 (no stored JSON) encodes the same fields.
+        assertEquals(made.metadataJson(), made.copy(sourceMetadataJson = null).metadataJson())
+    }
+
+    @Test
+    fun `409 idempotency_conflict fails for good with a clear message`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.Api(409, "idempotency_conflict", "The Idempotency-Key was already used with a different upload")
+        assertTrue(sender.send("c-voice") is SendOutcome.Failed)
+        val failed = store.get("c-voice")!!
+        assertEquals(CaptureStatus.FAILED, failed.status)
+        assertEquals(CaptureSender.CONFLICT_MESSAGE, failed.error)
     }
 
     @Test

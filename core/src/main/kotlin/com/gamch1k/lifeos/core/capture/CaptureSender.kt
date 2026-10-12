@@ -5,6 +5,7 @@ import com.gamch1k.lifeos.core.api.CreateInboxItem
 import com.gamch1k.lifeos.core.api.InboxItem
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
+import com.gamch1k.lifeos.core.api.LifeOsJson
 import com.gamch1k.lifeos.core.api.ProcessingAttempt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -18,7 +19,8 @@ import java.time.Instant
 interface CaptureApi {
     suspend fun uploadImage(file: File): String
     suspend fun createInboxItem(request: CreateInboxItem): InboxItem
-    suspend fun createAudioJob(file: File, sourceMetadata: JsonObject): AudioJob
+    /** [idempotencyKey] is the capture id, the same on every attempt; [sourceMetadataJson] byte-identical too. */
+    suspend fun createAudioJob(file: File, sourceMetadataJson: String, idempotencyKey: String): AudioJob
     suspend fun audioJob(id: String): AudioJob
     suspend fun inboxItem(id: String): InboxItem
     suspend fun processingAttempts(itemId: String): List<ProcessingAttempt>
@@ -27,8 +29,8 @@ interface CaptureApi {
 fun LifeOsClient.asCaptureApi(): CaptureApi = object : CaptureApi {
     override suspend fun uploadImage(file: File) = this@asCaptureApi.uploadImage(file, "image/jpeg").reference
     override suspend fun createInboxItem(request: CreateInboxItem) = this@asCaptureApi.createInboxItem(request)
-    override suspend fun createAudioJob(file: File, sourceMetadata: JsonObject) =
-        this@asCaptureApi.createAudioJob(file, "audio/ogg", Capture.SOURCE, sourceMetadata)
+    override suspend fun createAudioJob(file: File, sourceMetadataJson: String, idempotencyKey: String) =
+        this@asCaptureApi.createAudioJob(file, "audio/ogg", Capture.SOURCE, sourceMetadataJson, idempotencyKey)
     override suspend fun audioJob(id: String) = this@asCaptureApi.audioJob(id)
     override suspend fun inboxItem(id: String) = this@asCaptureApi.inboxItem(id)
     override suspend fun processingAttempts(itemId: String) = this@asCaptureApi.processingAttempts(itemId)
@@ -86,14 +88,15 @@ class CaptureSender(
             throw cancelled
         } catch (error: LifeOsException) {
             val giveUp = !error.retryable || start.attempts >= maxAttempts
+            val message = if (error is LifeOsException.Api && error.code == IDEMPOTENCY_CONFLICT) CONFLICT_MESSAGE else error.message
             save(id) {
                 it.copy(
                     status = if (giveUp) CaptureStatus.FAILED else CaptureStatus.PENDING,
-                    error = error.message,
+                    error = message,
                     authProblem = error.authProblem,
                 )
             }
-            if (giveUp) SendOutcome.Failed(error.message.orEmpty()) else SendOutcome.Retry(error.message.orEmpty())
+            if (giveUp) SendOutcome.Failed(message.orEmpty()) else SendOutcome.Retry(message.orEmpty())
         } catch (error: IOException) {
             // The recording or a photo cannot be read any more.
             val message = "The capture's file cannot be read: ${error.message}"
@@ -121,7 +124,7 @@ class CaptureSender(
             CreateInboxItem(
                 content = content,
                 source = Capture.SOURCE,
-                sourceMetadata = capture.sourceMetadata(),
+                sourceMetadata = LifeOsJson.decodeFromString(JsonObject.serializer(), capture.metadataJson()),
                 mediaReferences = references.takeIf { it.isNotEmpty() },
                 dedupeKey = capture.dedupeKey,
             ),
@@ -135,7 +138,7 @@ class CaptureSender(
         if (capture.voiceJobId == null) {
             val file = capture.files.firstOrNull()?.let(::File)
             if (file == null || !file.isFile) throw IOException("the recording is missing")
-            val job = api.createAudioJob(file, capture.sourceMetadata())
+            val job = api.createAudioJob(file, capture.metadataJson(), idempotencyKey = capture.id)
             save(capture.id) {
                 it.copy(status = CaptureStatus.SENT, error = null, authProblem = false, voiceJobId = job.id, voiceStatus = job.status, sentAt = clock().toString())
             }
@@ -166,6 +169,12 @@ class CaptureSender(
     companion object {
         /** Inbox needs some content; a photo-only capture says what it is, as the Dashboard's share does. */
         const val PHOTO_PLACEHOLDER = "Photo"
+
+        const val IDEMPOTENCY_CONFLICT = "idempotency_conflict"
+
+        /** 409 idempotency_conflict: Voice holds another upload under this capture's id. */
+        const val CONFLICT_MESSAGE =
+            "Voice already holds a different recording under this capture's id (409 idempotency_conflict), so it was not sent again. Delete it and record again."
     }
 }
 

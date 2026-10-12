@@ -106,7 +106,12 @@ class CaptureUploader(
                 }
                 HttpOutcome.AUTH, HttpOutcome.RETRYABLE -> UploadOutcome.Retryable(LifeOsApi.describe(result))
                 HttpOutcome.PERMANENT -> UploadOutcome.Rejected(
-                    if (result.status == 413) "The recording is too long for Voice." else LifeOsApi.describe(result),
+                    when (result.status) {
+                        413 -> "The recording is too long for Voice."
+                        // Voice honours Idempotency-Key (BUG-40): the key is taken by another upload.
+                        409 -> "Voice holds a different recording under this capture's id, so it was not sent again."
+                        else -> LifeOsApi.describe(result)
+                    },
                 )
             }
         }
