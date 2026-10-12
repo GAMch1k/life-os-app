@@ -1,0 +1,48 @@
+[versions]
+# Android SDK levels shared by the modules. compileSdk 37 because current
+# AndroidX/Compose releases require it; the apps still target 36.
+compileSdk = "37"
+targetSdk = "36"
+phoneMinSdk = "34"
+wearMinSdk = "33"
+buildTools = "36.1.0"   # must match tools/builder/Dockerfile
+
+agp = "9.4.1"
+kotlin = "2.4.21"
+composeBom = "2026.09.00"
+wearCompose = "1.7.1"
+activityCompose = "1.13.0"
+coreKtx = "1.19.1"
+lifecycle = "2.11.0"
+coroutines = "1.11.0"
+cronet = "500.1.0"      # bundles Chromium 155.0.8059.16
+junit = "4.13.2"
+
+[libraries]
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+
+wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wearCompose" }
+wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "wearCompose" }
+
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# Embedded Cronet: the whole Chromium network stack inside the APK
+# (cronet-embedded is now an empty alias of cronet-bundled).
+cronet-bundled = { module = "org.chromium.net:cronet-bundled", version.ref = "cronet" }
+
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
