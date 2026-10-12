@@ -26,6 +26,7 @@ import com.gamch1k.lifeos.phone.today.CaptureLinks
 import com.gamch1k.lifeos.phone.ui.AppRoot
 import com.gamch1k.lifeos.phone.ui.Screen
 import com.gamch1k.lifeos.phone.update.UpdateManager
+import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         graph.scope.launch { graph.updates.check(UpdateManager.Trigger.START) }
+        graph.scope.launch { graph.watchUpdates.check(WatchUpdateManager.Trigger.START) }
         // Push registration is refreshed when the app is opened (not on every background wake).
         graph.scope.launch { if (graph.tokens.current() != null) graph.push.syncIfDue() }
     }

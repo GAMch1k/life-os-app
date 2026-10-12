@@ -17,6 +17,7 @@ import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import com.gamch1k.lifeos.wear.BuildConfig
 import com.gamch1k.lifeos.wear.R
 import java.time.Instant
@@ -29,6 +30,7 @@ fun ConnectionScreen(viewModel: WearViewModel) {
     val phone by viewModel.phone.collectAsStateWithLifecycle()
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
     val message by viewModel.connectionMessage.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
     val use24Hour = DateFormat.is24HourFormat(LocalContext.current)
     val listState = rememberTransformingLazyColumnState()
     LaunchedEffect(Unit) { viewModel.lookForPhone() }
@@ -70,6 +72,22 @@ fun ConnectionScreen(viewModel: WearViewModel) {
                     onClick = viewModel::testConnection,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text(stringResource(R.string.test_connection)) },
+                )
+            }
+            item {
+                val last = update
+                Line(
+                    stringResource(R.string.update),
+                    when {
+                        !viewModel.canInstallUpdates -> stringResource(R.string.update_not_allowed)
+                        last == null -> stringResource(R.string.update_none)
+                        else -> when (last.status) {
+                            WatchUpdateStatus.INSTALLED -> stringResource(R.string.update_installed, last.versionName)
+                            WatchUpdateStatus.INSTALLING -> stringResource(R.string.update_installing, last.versionName)
+                            WatchUpdateStatus.WAITING_FOR_CONFIRMATION -> stringResource(R.string.update_waiting, last.versionName)
+                            else -> stringResource(R.string.update_failed, last.versionName.ifEmpty { last.versionCode.toString() }, last.message)
+                        }
+                    },
                 )
             }
             message?.let { text ->

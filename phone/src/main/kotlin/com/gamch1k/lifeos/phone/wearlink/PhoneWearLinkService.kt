@@ -7,10 +7,14 @@ import com.gamch1k.lifeos.core.wearlink.WearCredentials
 import com.gamch1k.lifeos.core.wearlink.WearLink
 import com.gamch1k.lifeos.core.wearlink.WearLinkHost
 import com.gamch1k.lifeos.core.wearlink.WearRelay
+import com.gamch1k.lifeos.core.wearlink.UpdateProtocolException
+import com.gamch1k.lifeos.core.wearlink.WatchUpdateCodec
 import com.gamch1k.lifeos.core.wearlink.WearTokenSource
+import com.gamch1k.lifeos.phone.graph
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.android.gms.wearable.ChannelClient
+import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import kotlinx.coroutines.CoroutineScope
@@ -21,8 +25,9 @@ import kotlinx.coroutines.tasks.await
 
 /**
  * The phone's end of the link to the watch app (docs/wear.md). Play services
- * starts it when the watch sends a request or opens a channel on a
- * `/lifeos/` path; the work itself is [PhoneWearLinkHandler]'s.
+ * starts it when the watch sends a request, a message or opens a channel on
+ * a `/lifeos/` path; the relay's work is [PhoneWearLinkHandler]'s, the watch's
+ * update reports go to the app's WatchUpdateManager.
  *
  * The token source and the relay come from the app's `Application`, which
  * implements [WearLinkHost] since 0.3.0. The fallback without it: the token
@@ -51,6 +56,18 @@ class PhoneWearLinkService : WearableListenerService() {
             }
         }
         return reply.task
+    }
+
+    /** The watch app reports its version and its last install (P19-06). */
+    override fun onMessageReceived(event: MessageEvent) {
+        if (event.path != WearLink.PATH_WATCH_REPORT) return
+        val info = try {
+            WatchUpdateCodec.decodeInfo(event.data)
+        } catch (_: UpdateProtocolException) {
+            return
+        }
+        val graph = applicationContext.graph
+        graph.scope.launch { graph.watchUpdates.onWatchReport(info) }
     }
 
     override fun onChannelOpened(channel: ChannelClient.Channel) {

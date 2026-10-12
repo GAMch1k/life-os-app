@@ -113,6 +113,20 @@ class PhoneLink(context: Context, private val store: CredentialStore) : PhoneCon
         }
     }
 
+    /** A one-way message to the phone app; false when no phone is reachable. */
+    suspend fun send(path: String, payload: ByteArray): Boolean {
+        return try {
+            val node = phoneNodeId() ?: return false
+            messages.sendMessage(node, path, payload).await()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            forgetPhone()
+            false
+        }
+    }
+
     /** Asks the phone for the server URL and service token, and stores them. */
     suspend fun fetchCredentials(): CredentialsFetch {
         val node = try {

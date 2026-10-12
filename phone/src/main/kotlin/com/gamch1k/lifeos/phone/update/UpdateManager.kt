@@ -17,7 +17,6 @@ import com.gamch1k.lifeos.core.api.AppRelease
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.api.LifeOsJson
-import com.gamch1k.lifeos.core.update.ApkIntegrity
 import com.gamch1k.lifeos.core.update.UpdateDecision
 import com.gamch1k.lifeos.core.update.UpdatePolicy
 import com.gamch1k.lifeos.phone.BuildConfig
@@ -34,7 +33,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.time.Duration
 import java.time.Instant
 
@@ -80,6 +78,7 @@ class UpdateManager(
 
     private val mutex = Mutex()
     private val dir = File(app.filesDir, "updates")
+    private val downloader = ReleaseDownloader(client)
 
     @Volatile
     private var inFlight: AppRelease? = null
@@ -181,53 +180,22 @@ class UpdateManager(
     private fun apkFile(release: AppRelease) = File(dir, "lifeos-phone-${release.versionCode}.apk")
 
     /** Downloads (resuming a partial file) and verifies; true when [apkFile] is ready. */
-    private suspend fun download(release: AppRelease): Boolean = withContext(Dispatchers.IO) {
-        dir.mkdirs()
-        val target = apkFile(release)
-        val part = File(dir, target.name + ".part")
-        dir.listFiles()?.filter { it != target && it != part }?.forEach { it.delete() }
-        if (target.isFile && ApkIntegrity.check(target, release.size, release.sha256) == ApkIntegrity.Result.Ok) {
-            stateFlow.value = UpdateState.ReadyToInstall(release)
-            return@withContext true
-        }
-        target.delete()
-        val resume = UpdatePolicy.resumeFrom(part.length(), release.size)
-        if (resume == null) part.delete()
-        var base = 0L
-        stateFlow.value = UpdateState.Downloading(release, (resume ?: 0L).toFloat() / release.size)
-        try {
-            client.download(
-                release.url,
-                sink = { status, _ ->
-                    val append = status == 206 && resume != null
-                    base = if (append) resume else 0L
-                    FileOutputStream(part, append)
-                },
-                rangeStart = resume,
-                onProgress = { read -> stateFlow.value = UpdateState.Downloading(release, ((base + read).toFloat() / release.size).coerceIn(0f, 1f)) },
-            )
+    private suspend fun download(release: AppRelease): Boolean {
+        stateFlow.value = UpdateState.Downloading(release, 0f)
+        val result = try {
+            downloader.fetch(release, dir, apkFile(release).name) { fraction -> stateFlow.value = UpdateState.Downloading(release, fraction) }
         } catch (cancelled: CancellationException) {
             // The worker was stopped (Wi-Fi left, time limit): the partial file stays for a resume.
             stateFlow.value = UpdateState.Available(release)
             throw cancelled
-        } catch (error: LifeOsException) {
-            if (error is LifeOsException.Api && error.status == 416) part.delete()
-            stateFlow.value = UpdateState.Failed("The download stopped: ${error.message}", release)
-            return@withContext false
         }
-        when (val result = ApkIntegrity.check(part, release.size, release.sha256)) {
-            ApkIntegrity.Result.Ok -> {
-                part.renameTo(target)
+        return when (result) {
+            is ReleaseDownloader.Result.Ready -> {
                 stateFlow.value = UpdateState.ReadyToInstall(release)
                 true
             }
-            else -> {
-                part.delete()
-                val why = when (result) {
-                    is ApkIntegrity.Result.WrongSize -> "it has ${result.actual} bytes, the manifest says ${result.expected}"
-                    is ApkIntegrity.Result.WrongSha256 -> "its SHA-256 is not the published one"
-                }
-                stateFlow.value = UpdateState.Failed("The downloaded update was discarded: $why.", release)
+            is ReleaseDownloader.Result.Failed -> {
+                stateFlow.value = UpdateState.Failed(result.message, release)
                 false
             }
         }

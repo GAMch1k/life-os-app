@@ -63,4 +63,16 @@
     <string name="token_fetch_failed">The phone answered something unreadable</string>
     <string name="test_connection">Test connection</string>
     <string name="version">Version %1$s (%2$d)</string>
+
+    <string name="update_channel">Updates</string>
+    <string name="update_ready">Life OS %1$s is ready</string>
+    <string name="update_tap_to_install">Tap to install</string>
+    <string name="install_update">Install update</string>
+    <string name="update">Update</string>
+    <string name="update_installed">%1$s installed</string>
+    <string name="update_installing">Installing %1$s…</string>
+    <string name="update_waiting">%1$s waits: tap Install update on Home</string>
+    <string name="update_failed">%1$s failed: %2$s</string>
+    <string name="update_none">Through the phone; none yet</string>
+    <string name="update_not_allowed">Not allowed yet: run Set up the watch app on the phone</string>
 </resources>

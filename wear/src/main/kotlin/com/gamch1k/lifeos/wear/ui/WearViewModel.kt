@@ -32,6 +32,12 @@ class WearViewModel(application: Application) : AndroidViewModel(application) {
     val todayError = graph.today.lastError
     val credentials = graph.credentials.credentials
 
+    /** The last update through the phone (P19-06). */
+    val update = graph.updateStore.result
+
+    /** "Install unknown apps" is allowed for Life OS (the setup grants it once). */
+    val canInstallUpdates: Boolean get() = getApplication<Application>().packageManager.canRequestPackageInstalls()
+
     private val mutableRefreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = mutableRefreshing.asStateFlow()
 
@@ -90,6 +96,11 @@ class WearViewModel(application: Application) : AndroidViewModel(application) {
             graph.captureStore.update(captureId) { CaptureMachine.retry(it) ?: it }
             CaptureWorker.runNow(getApplication())
         }
+    }
+
+    /** Home's "Install update": Android's confirmation, now that the app is on screen. */
+    fun installUpdate() {
+        graph.scope.launch { graph.selfUpdater.installWaiting() }
     }
 
     fun delete(captureId: String) {

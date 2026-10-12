@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- Updates through the phone (P19-06): the app installs its own newer APK, silently once
+         "Install unknown apps" is allowed (granted once over ADB by the phone's setup). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <!-- The update's one-tap confirmation, when Android asks, and the recording notice. Granted by the setup. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <uses-feature android:name="android.hardware.type.watch" />
     <uses-feature
         android:name="android.hardware.microphone"
@@ -59,7 +66,8 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- The phone's pings: a new token, changed tasks or events, the phone app coming into reach. -->
+        <!-- The phone's pings: a new token, changed tasks or events, the phone app coming into reach;
+             and its update requests: the version question, an APK offer, the APK's channel (P19-06). -->
         <service
             android:name=".link.WatchWearLinkService"
             android:exported="true">
@@ -68,10 +76,30 @@
                 <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
             </intent-filter>
             <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
+            </intent-filter>
+            <intent-filter>
                 <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
                 <data android:scheme="wear" android:host="*" android:path="/lifeos_phone_relay" />
             </intent-filter>
         </service>
+
+        <!-- PackageInstaller's verdict on the app's own update, and the new version's first start. -->
+        <receiver
+            android:name=".update.InstallResultReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".update.PackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".tile.CaptureTileService"

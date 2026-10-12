@@ -13,6 +13,10 @@ package com.gamch1k.lifeos.core.wearlink
  *   runs them with its own client ([WearRelay]).
  * - The phone tells the watch when the token or the day's data changed
  *   ([PATH_CREDENTIALS_CHANGED], [PATH_TODAY_CHANGED], plain messages).
+ * - Updates of the watch app go through the phone (P19-06): the phone asks
+ *   the watch's version ([PATH_WATCH_INFO]), offers a newer APK
+ *   ([PATH_APK_OFFER]) and streams it ([PATH_APK_TRANSFER]); the watch
+ *   reports the result ([PATH_WATCH_REPORT]).
  *
  * See docs/wear.md.
  */
@@ -43,6 +47,27 @@ object WearLink {
 
     /** Phone → watch, a message without payload: tasks or events changed; the watch refreshes Today. */
     const val PATH_TODAY_CHANGED = "/lifeos/today-changed"
+
+    /** Phone → watch, `MessageClient.sendRequest`: a [WatchInfoRequest], answered with a [WatchInfo]. */
+    const val PATH_WATCH_INFO = "/lifeos/watch-info"
+
+    /**
+     * Watch → phone, a message: a [WatchInfo] the watch sends by itself, on its
+     * first start after an update and after every install result.
+     */
+    const val PATH_WATCH_REPORT = "/lifeos/watch-report"
+
+    /** Phone → watch, `MessageClient.sendRequest`: an [ApkOffer], answered with an [ApkOfferReply]. */
+    const val PATH_APK_OFFER = "/lifeos/apk-offer"
+
+    /** Phone → watch, `ChannelClient`: the accepted APK ([ApkTransferCodec]); the watch answers an [ApkTransferResult]. */
+    const val PATH_APK_TRANSFER = "/lifeos/apk-transfer"
+
+    /** In [WatchInfo.capabilities]: the watch app takes APKs over [PATH_APK_OFFER] and [PATH_APK_TRANSFER] (0.4.0 and later). */
+    const val WATCH_CAN_UPDATE = "apk_transfer_v1"
+
+    /** The largest APK the link carries; the wear APK is about 15 MB. */
+    const val MAX_APK_BYTES = 64L * 1024 * 1024
 
     /**
      * The largest message, request or reply, the link sends. Data Layer

@@ -41,6 +41,11 @@ import com.gamch1k.lifeos.phone.Dashboard
 import com.gamch1k.lifeos.phone.graph
 import com.gamch1k.lifeos.phone.update.UpdateManager
 import com.gamch1k.lifeos.phone.update.UpdateState
+import com.gamch1k.lifeos.phone.watch.WatchActivity
+import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
+import com.gamch1k.lifeos.core.update.WatchAbi
+import com.gamch1k.lifeos.core.wearlink.WatchUpdateResult
+import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,6 +100,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateAction() = graph.updates.act()
+
+    /** Settings › Watch (P19-06). */
+    val watch = graph.watchUpdates.status
+
+    fun updateWatchNow() {
+        graph.scope.launch { graph.watchUpdates.check(WatchUpdateManager.Trigger.MANUAL) }
+    }
 
     val signingOut = MutableStateFlow(false)
 
@@ -154,6 +166,8 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+
+            WatchSection(viewModel, onSetUp = { navigator.go(Screen.WatchSetup) })
 
             NotificationsSection()
 
@@ -224,4 +238,65 @@ private fun updateActionLabel(update: UpdateState): String? = when (update) {
     is UpdateState.WaitingForConfirmation -> "Confirm"
     is UpdateState.Failed -> if (update.release != null) "Try again" else null
     else -> null
+}
+
+/** The watch app: its version, the last update, "Update now", and the one-time setup (docs/wear.md). */
+@Composable
+private fun WatchSection(viewModel: SettingsViewModel, onSetUp: () -> Unit) {
+    val status by viewModel.watch.collectAsStateWithLifecycle()
+    SectionCard("Watch") {
+        val watch = status.watch
+        Text(
+            if (watch == null) "No watch app has reported to this phone yet."
+            else "Life OS ${watch.versionName} (${watch.versionCode}) on the watch" + (status.seenAt?.let { ", seen ${Times.short(it)}" } ?: "") + ".",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        watch?.lastUpdate?.let { Text("Last update: ${describe(it)}", style = MaterialTheme.typography.bodyMedium) }
+        when (val activity = status.activity) {
+            WatchActivity.Idle -> Unit
+            WatchActivity.Checking -> Text("Checking…", style = MaterialTheme.typography.bodyMedium)
+            is WatchActivity.Downloading -> {
+                Text("Downloading ${activity.release.versionName} for the watch: ${(activity.fraction * 100).toInt()} %", style = MaterialTheme.typography.bodyMedium)
+                LinearProgressIndicator(progress = { activity.fraction }, modifier = Modifier.fillMaxWidth())
+            }
+            is WatchActivity.Sending -> {
+                Text("Sending ${activity.release.versionName} to the watch: ${(activity.fraction * 100).toInt()} %", style = MaterialTheme.typography.bodyMedium)
+                LinearProgressIndicator(progress = { activity.fraction }, modifier = Modifier.fillMaxWidth())
+            }
+            is WatchActivity.Note -> Text(
+                activity.text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (activity.problem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        val busy = status.activity is WatchActivity.Checking || status.activity is WatchActivity.Downloading || status.activity is WatchActivity.Sending
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = viewModel::updateWatchNow, enabled = !busy) { Text("Update now") }
+            TextButton(onClick = onSetUp, enabled = !busy) { Text("Set up the watch app") }
+        }
+        if (status.abis.isNotEmpty()) {
+            val smallest = WatchAbi.smallestApkAbi(status.abis)
+            Text(
+                "Watch ABIs: ${status.abis.joinToString()}." + (smallest?.let { " A watch APK with only $it would do." } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            "The phone sends new versions of the watch app to the watch, which installs them by itself (checked daily on Wi-Fi). " +
+                "\"Set up the watch app\" installs it the first time, or again after a reset, over Wireless debugging.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+private fun describe(result: WatchUpdateResult): String {
+    val version = result.versionName.ifEmpty { result.versionCode.toString() }
+    val at = Times.parseOrNull(result.at)?.let { " (${Times.short(it)})" } ?: ""
+    return when (result.status) {
+        WatchUpdateStatus.INSTALLED -> "$version installed$at."
+        WatchUpdateStatus.INSTALLING -> "installing $version$at…"
+        WatchUpdateStatus.WAITING_FOR_CONFIRMATION -> "$version waits for you to confirm it on the watch$at."
+        WatchUpdateStatus.REFUSED -> "the watch refused $version$at: ${result.message}"
+        else -> "$version failed$at: ${result.message}"
+    }
 }

@@ -28,6 +28,9 @@ sealed interface Screen {
     data object Queue : Screen
     data object Settings : Screen
     data object NetworkCheck : Screen
+
+    /** Settings › Watch › Set up the watch app (P19-06). */
+    data object WatchSetup : Screen
 }
 
 /** Moves between screens; the back stack is a plain list (Navigation 3). */
@@ -66,6 +69,8 @@ private fun encode(screen: Screen): String? = when (screen) {
     Screen.Queue -> "queue"
     Screen.Settings -> "settings"
     Screen.NetworkCheck -> "network-check"
+    // Its pairing state lives in memory only; after a process death it starts over from Settings.
+    Screen.WatchSetup -> null
 }
 
 private fun decode(saved: String): Screen? = when {
@@ -108,6 +113,7 @@ fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = Mutabl
             entry<Screen.Queue> { QueueScreen(navigator) }
             entry<Screen.Settings> { SettingsScreen(navigator) }
             entry<Screen.NetworkCheck> { NetworkCheckScreen(onBack = navigator::back) }
+            entry<Screen.WatchSetup> { WatchSetupScreen(navigator) }
         },
     )
 }

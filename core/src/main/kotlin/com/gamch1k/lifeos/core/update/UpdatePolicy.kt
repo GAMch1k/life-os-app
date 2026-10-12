@@ -24,25 +24,53 @@ sealed interface UpdateDecision {
     data class Invalid(val reason: String) : UpdateDecision
 }
 
+/** The two apps of the manifest (`apps.phone`, `apps.wear`). */
+enum class ReleaseApp(val key: String) {
+    PHONE("phone"),
+    WEAR("wear"),
+    ;
+
+    fun release(manifest: UpdateManifest): AppRelease? = when (this) {
+        PHONE -> manifest.apps.phone
+        WEAR -> manifest.apps.wear
+    }
+}
+
 /**
  * The update rules of docs/operations/android-releases.md in the life-os
- * repository: install `apps.phone` only if its versionCode is greater than
- * ours and the device's API level is at least its minSdk.
+ * repository: install an app's entry (`apps.phone` on the phone, `apps.wear`
+ * for the watch) only if its versionCode is greater than the installed one
+ * and the device's API level is at least its minSdk.
  */
 object UpdatePolicy {
     const val FORMAT_VERSION = 1
     private val SHA256 = Regex("^[0-9a-f]{64}$")
-    private val APK_PATH = Regex("^/android/lifeos-phone-[0-9A-Za-z][0-9A-Za-z._+-]*-[0-9]+\\.apk$")
 
-    fun decide(manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int): UpdateDecision {
+    private fun apkPath(app: ReleaseApp) = Regex("^/android/lifeos-${app.key}-[0-9A-Za-z][0-9A-Za-z._+-]*-[0-9]+\\.apk$")
+
+    /** The phone app's own update. */
+    fun decide(manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int): UpdateDecision =
+        decide(ReleaseApp.PHONE, manifest, installedVersionCode, sdkInt)
+
+    /**
+     * [app]'s entry against the installed [installedVersionCode] on a device
+     * with [sdkInt] (for the watch: the version and API level it reports).
+     */
+    fun decide(app: ReleaseApp, manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int): UpdateDecision {
         if (manifest.formatVersion != FORMAT_VERSION) return UpdateDecision.UnsupportedFormat(manifest.formatVersion)
-        val release = manifest.apps.phone ?: return UpdateDecision.UpToDate(null)
+        val release = app.release(manifest) ?: return UpdateDecision.UpToDate(null)
         if (release.versionCode <= installedVersionCode) return UpdateDecision.UpToDate(release)
-        if (!SHA256.matches(release.sha256)) return UpdateDecision.Invalid("the SHA-256 is not 64 lowercase hex digits")
-        if (release.size <= 0) return UpdateDecision.Invalid("the size is not positive")
-        if (!APK_PATH.matches(release.url) || ".." in release.url) return UpdateDecision.Invalid("the URL is not a phone APK under /android/")
+        validate(app, release)?.let { return UpdateDecision.Invalid(it) }
         if (sdkInt < release.minSdk) return UpdateDecision.NeedsNewerAndroid(release)
         return UpdateDecision.Available(release)
+    }
+
+    /** Why [release] can't be downloaded at all, or null when its hash, size and URL are usable. */
+    fun validate(app: ReleaseApp, release: AppRelease): String? = when {
+        !SHA256.matches(release.sha256) -> "the SHA-256 is not 64 lowercase hex digits"
+        release.size <= 0 -> "the size is not positive"
+        !apkPath(app).matches(release.url) || ".." in release.url -> "the URL is not a ${app.key} APK under /android/"
+        else -> null
     }
 
     /** Whether an automatic check is due, at most one per [interval]. */

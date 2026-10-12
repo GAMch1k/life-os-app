@@ -47,7 +47,7 @@
             </intent-filter>
         </activity>
 
-        <!-- The link to the watch app (docs/wear.md): token handoff and API relay. -->
+        <!-- The link to the watch app (docs/wear.md): token handoff, API relay, the watch's update reports. -->
         <service
             android:name=".wearlink.PhoneWearLinkService"
             android:exported="true">
@@ -57,6 +57,11 @@
             </intent-filter>
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
+            </intent-filter>
+            <!-- The watch app's reports: its version and its last install (P19-06). -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
                 <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
             </intent-filter>
         </service>

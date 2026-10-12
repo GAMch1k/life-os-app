@@ -33,6 +33,18 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        resources {
+            // BouncyCastle's Java resources: post-quantum tables (1.2 MB) and
+            // certificate-path messages. The watch setup uses neither.
+            excludes += listOf(
+                "org/bouncycastle/pqc/**",
+                "org/bouncycastle/pkix/CertPathReviewerMessages*.properties",
+                "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -60,4 +72,10 @@ dependencies {
     implementation(libs.unifiedpush.connector)
     implementation(libs.unifiedpush.embedded.fcm.distributor)
     implementation(libs.androidx.glance.appwidget)
+
+    // The watch setup (P19-06): pairing with and installing onto the watch over Wireless debugging.
+    implementation(libs.libadb.android)
+    implementation(libs.conscrypt.android)
+    implementation(libs.bouncycastle.bcpkix)
+    implementation(libs.bouncycastle.bcprov)
 }
