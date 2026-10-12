@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.gamch1k.lifeos.phone.graph
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /** The daily update check, on an unmetered network. */
@@ -34,16 +35,22 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 /** Receives PackageInstaller's verdict on a commit. */
 class InstallResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val updates = context.graph.updates
-        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION ->
-                updates.onPendingUserAction(intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java))
-            PackageInstaller.STATUS_SUCCESS -> updates.onInstalled()
-            else -> updates.onInstallFailed(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+        val graph = context.graph
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        val confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        // The in-flight release may have to be read from disk (a fresh process).
+        val pending = goAsync()
+        graph.scope.launch {
+            try {
+                when (status) {
+                    PackageInstaller.STATUS_PENDING_USER_ACTION -> graph.updates.onPendingUserAction(confirm)
+                    PackageInstaller.STATUS_SUCCESS -> graph.updates.onInstalled()
+                    else -> graph.updates.onInstallFailed(status, message)
+                }
+            } finally {
+                pending.finish()
+            }
         }
-    }
-
-    companion object {
-        const val EXTRA_VERSION_CODE = "version-code"
     }
 }

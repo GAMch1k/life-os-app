@@ -16,6 +16,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.gamch1k.lifeos.core.api.AppRelease
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
+import com.gamch1k.lifeos.core.api.LifeOsJson
 import com.gamch1k.lifeos.core.update.ApkIntegrity
 import com.gamch1k.lifeos.core.update.UpdateDecision
 import com.gamch1k.lifeos.core.update.UpdatePolicy
@@ -23,6 +24,7 @@ import com.gamch1k.lifeos.phone.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -78,6 +80,9 @@ class UpdateManager(
     private val mutex = Mutex()
     private val dir = File(app.filesDir, "updates")
 
+    @Volatile
+    private var inFlight: AppRelease? = null
+
     val canInstall: Boolean get() = app.packageManager.canRequestPackageInstalls()
 
     /** Settings › Apps › Special access › Install unknown apps, for this app. */
@@ -86,8 +91,6 @@ class UpdateManager(
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     suspend fun check(trigger: Trigger) = mutex.withLock {
-        val current = stateFlow.value
-        if (current is UpdateState.Downloading || current is UpdateState.Installing) return@withLock
         val now = Instant.now()
         if (trigger == Trigger.START && !UpdatePolicy.checkDue(lastCheck(), now, START_INTERVAL)) return@withLock
         if (trigger == Trigger.MANUAL) stateFlow.value = UpdateState.Checking
@@ -116,7 +119,7 @@ class UpdateManager(
                 null,
             )
             is UpdateDecision.UnsupportedFormat -> stateFlow.value = UpdateState.Failed(
-                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version from ${'$'}server/android/ by hand.",
+                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version by hand from the server's /android/ page.",
                 null,
             )
             is UpdateDecision.Invalid -> stateFlow.value = UpdateState.Failed("The published update is unusable: ${decision.reason}.", null)
@@ -157,9 +160,12 @@ class UpdateManager(
 
     /** Back from the "Install unknown apps" setting: carry on if it was granted. */
     fun onResume() {
-        val current = stateFlow.value
-        if (current is UpdateState.NeedsPermission && canInstall) {
-            scope.launch { mutex.withLock { downloadAndInstall(current.release) } }
+        if (stateFlow.value !is UpdateState.NeedsPermission || !canInstall) return
+        scope.launch {
+            mutex.withLock {
+                val current = stateFlow.value
+                if (current is UpdateState.NeedsPermission && canInstall) downloadAndInstall(current.release)
+            }
         }
     }
 
@@ -200,6 +206,8 @@ class UpdateManager(
                 onProgress = { read -> stateFlow.value = UpdateState.Downloading(release, ((base + read).toFloat() / release.size).coerceIn(0f, 1f)) },
             )
         } catch (cancelled: CancellationException) {
+            // The worker was stopped (Wi-Fi left, time limit): the partial file stays for a resume.
+            stateFlow.value = UpdateState.Available(release)
             throw cancelled
         } catch (error: LifeOsException) {
             if (error is LifeOsException.Api && error.status == 416) part.delete()
@@ -242,8 +250,11 @@ class UpdateManager(
             return@withContext
         }
         stateFlow.value = UpdateState.Installing(release)
+        val installer = packageManager.packageInstaller
+        // A session left by an earlier attempt (cancelled, or never confirmed) goes first.
+        installer.mySessions.filter { it.appPackageName == app.packageName }.forEach { runCatching { installer.abandonSession(it.sessionId) } }
+        var sessionId = -1
         try {
-            val installer = packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                 setAppPackageName(app.packageName)
                 setSize(file.length())
@@ -252,35 +263,47 @@ class UpdateManager(
                 // UPDATE_PACKAGES_WITHOUT_USER_ACTION; otherwise Android asks.
                 setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
-            val sessionId = installer.createSession(params)
+            sessionId = installer.createSession(params)
+            persistInFlight(release)
             installer.openSession(sessionId).use { session ->
                 session.openWrite("base.apk", 0, file.length()).use { out ->
                     file.inputStream().use { it.copyTo(out) }
                     session.fsync(out)
                 }
-                val intent = Intent(app, InstallResultReceiver::class.java)
-                    .setPackage(app.packageName)
-                    .putExtra(InstallResultReceiver.EXTRA_VERSION_CODE, release.versionCode)
+                val intent = Intent(app, InstallResultReceiver::class.java).setPackage(app.packageName)
                 val pending = PendingIntent.getBroadcast(app, sessionId, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
                 session.commit(pending.intentSender)
             }
-            settings.edit { it[INSTALLING] = release.versionName }
         } catch (error: Exception) {
-            if (error is CancellationException) throw error
+            if (sessionId >= 0) runCatching { installer.abandonSession(sessionId) }
+            if (error is CancellationException) {
+                stateFlow.value = UpdateState.ReadyToInstall(release)
+                throw error
+            }
             stateFlow.value = UpdateState.Failed("Android did not take the update: ${error.message}", release)
         }
     }
 
+    /** The release being installed, also on disk: the installer's answer may wake a fresh process. */
+    private suspend fun persistInFlight(release: AppRelease) {
+        inFlight = release
+        withContext(NonCancellable) { settings.edit { it[INSTALLING] = LifeOsJson.encodeToString(AppRelease.serializer(), release) } }
+    }
+
+    private suspend fun releaseInFlight(): AppRelease? = inFlight ?: settings.data.first()[INSTALLING]?.let {
+        runCatching { LifeOsJson.decodeFromString(AppRelease.serializer(), it) }.getOrNull()
+    }?.takeIf { it.versionCode > BuildConfig.VERSION_CODE }?.also { inFlight = it }
+
     /** PackageInstaller wants the owner to confirm. */
-    internal fun onPendingUserAction(confirm: Intent?) {
-        val release = releaseInFlight() ?: return
-        stateFlow.value = UpdateState.WaitingForConfirmation(release, confirm)
+    internal suspend fun onPendingUserAction(confirm: Intent?) {
+        val release = releaseInFlight()
+        if (release != null) stateFlow.value = UpdateState.WaitingForConfirmation(release, confirm)
         if (foreground.value && confirm != null) {
             runCatching { app.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
     }
 
-    internal fun onInstallFailed(status: Int, message: String?) {
+    internal suspend fun onInstallFailed(status: Int, message: String?) {
         val release = releaseInFlight()
         stateFlow.value = if (status == PackageInstaller.STATUS_FAILURE_ABORTED && release != null) {
             UpdateState.ReadyToInstall(release)
@@ -290,15 +313,8 @@ class UpdateManager(
     }
 
     internal fun onInstalled() {
+        inFlight = null
         stateFlow.value = UpdateState.UpToDate
-    }
-
-    private fun releaseInFlight(): AppRelease? = when (val current = stateFlow.value) {
-        is UpdateState.Installing -> current.release
-        is UpdateState.WaitingForConfirmation -> current.release
-        is UpdateState.ReadyToInstall -> current.release
-        is UpdateState.Failed -> current.release
-        else -> null
     }
 
     /**
@@ -323,6 +339,7 @@ class UpdateManager(
     /** Sign out: no downloaded APK stays behind. */
     suspend fun forget() {
         withContext(Dispatchers.IO) { dir.deleteRecursively() }
+        inFlight = null
         stateFlow.value = UpdateState.Idle
         settings.edit {
             it.remove(LAST_CHECK)
