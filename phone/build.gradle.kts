@@ -57,4 +57,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.browser)
+    implementation(libs.unifiedpush.connector)
+    implementation(libs.unifiedpush.embedded.fcm.distributor)
+    implementation(libs.androidx.glance.appwidget)
 }

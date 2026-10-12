@@ -137,6 +137,29 @@ class LifeOsClient(
 
     suspend fun audioJob(id: String): AudioJob = get("/api/voice/v1/audio-jobs/${segment(id)}", emptyList(), AudioJob.serializer())
 
+    // ---- Notifications: Web Push
+
+    /** `GET /v1/push/config`: the server's VAPID public key, whether web push is set up and delivering. */
+    suspend fun pushConfig(): PushConfig = get("/api/notifications/v1/push/config", emptyList(), PushConfig.serializer())
+
+    /** `POST /v1/push/subscriptions`: idempotent by endpoint (a known endpoint gets its keys updated). */
+    suspend fun subscribePush(endpoint: String, p256dh: String, auth: String): PushSubscription = send(
+        "POST",
+        "/api/notifications/v1/push/subscriptions",
+        jsonBody(PushSubscriptionRequest.serializer(), PushSubscriptionRequest(endpoint, PushKeys(p256dh, auth))),
+        PushSubscription.serializer(),
+        idempotent = true,
+    )
+
+    /** `DELETE /v1/push/subscriptions/{id}`; a device already gone (404) counts as removed. */
+    suspend fun unsubscribePush(subscriptionId: String) {
+        try {
+            exchange("DELETE", "/api/notifications/v1/push/subscriptions/${segment(subscriptionId)}", emptyList(), null, idempotent = true)
+        } catch (error: LifeOsException.Api) {
+            if (error.status != 404) throw error
+        }
+    }
+
     // ---- Connection and updates
 
     /** Onboarding's "Test connection": one cheap authenticated read with [candidate]. */

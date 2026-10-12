@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.phone
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,16 +20,25 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.lifecycleScope
+import com.gamch1k.lifeos.phone.push.LifeOsNotifications
+import com.gamch1k.lifeos.phone.today.CaptureLinks
 import com.gamch1k.lifeos.phone.ui.AppRoot
+import com.gamch1k.lifeos.phone.ui.Screen
 import com.gamch1k.lifeos.phone.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    /** A capture screen asked for by a widget button, for AppRoot to open. */
+    private val launches = MutableStateFlow<Screen?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handle(intent)
         setContent {
             LifeOsTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -42,17 +52,41 @@ class MainActivity : ComponentActivity() {
                     }
                     when (val known = signedIn) {
                         null -> Box(Modifier.fillMaxSize())
-                        else -> AppRoot(startSignedIn = known)
+                        else -> AppRoot(startSignedIn = known, launches = launches)
                     }
                 }
             }
         }
         graph.scope.launch { graph.updates.check(UpdateManager.Trigger.START) }
+        // Push registration is refreshed when the app is opened (not on every background wake).
+        graph.scope.launch { if (graph.tokens.current() != null) graph.push.syncIfDue() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
     }
 
     override fun onResume() {
         super.onResume()
         graph.updates.onResume()
+    }
+
+    /** A notification's link opens in the Dashboard; a widget button opens its capture screen. */
+    private fun handle(intent: Intent?) {
+        intent ?: return
+        // Reopened from Recents: the old intent comes again; it was handled already.
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        if (intent.action == LifeOsNotifications.ACTION_OPEN_LINK) {
+            intent.getStringExtra(LifeOsNotifications.EXTRA_LINK)?.let { Dashboard.open(this, lifecycleScope, it) }
+            return
+        }
+        launches.value = when (intent.getStringExtra(CaptureLinks.EXTRA_CAPTURE)) {
+            "voice" -> Screen.VoiceCapture
+            "photo" -> Screen.PhotoCapture(camera = true)
+            "text" -> Screen.TextCapture
+            else -> return
+        }
     }
 }
 

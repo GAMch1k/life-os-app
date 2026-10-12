@@ -42,6 +42,7 @@ import com.gamch1k.lifeos.phone.graph
 import com.gamch1k.lifeos.phone.update.UpdateManager
 import com.gamch1k.lifeos.phone.update.UpdateState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -95,9 +96,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun updateAction() = graph.updates.act()
 
+    val signingOut = MutableStateFlow(false)
+
+    /** Runs in the app's scope: leaving Settings meanwhile must not leave the token behind. */
     fun signOut(done: () -> Unit) {
+        if (signingOut.value) return
+        signingOut.value = true
+        val work = graph.scope.async { graph.signOut() }
         viewModelScope.launch {
-            graph.signOut()
+            work.await()
             done()
         }
     }
@@ -147,6 +154,8 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                 )
             }
 
+            NotificationsSection()
+
             SectionCard("Diagnostics") {
                 Text("Can this phone reach Life OS with the hostname hidden (ECH)?", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { navigator.go(Screen.NetworkCheck) }) { Text("Network check") }
@@ -158,8 +167,12 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
             }
 
             SectionCard("Sign out") {
-                Text("Removes the service token, the cached Today and the capture queue from this phone.", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
+                Text("Removes the service token, the push subscription, the cached Today and the capture queue from this phone.", style = MaterialTheme.typography.bodySmall)
+                val signingOut by viewModel.signingOut.collectAsStateWithLifecycle()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = { confirmSignOut = true }, enabled = !signingOut) { Text("Sign out") }
+                    if (signingOut) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
             }
         }
     }

@@ -128,6 +128,20 @@ data class AudioJob(
     val attemptCount: Int = 0,
 )
 
+// ---- Notifications: Web Push (/api/notifications/v1/push)
+
+@Serializable
+data class PushConfig(val configured: Boolean = false, val publicKey: String? = null, val delivering: Boolean = false)
+
+@Serializable
+data class PushSubscriptionRequest(val endpoint: String, val keys: PushKeys)
+
+@Serializable
+data class PushKeys(val p256dh: String, val auth: String)
+
+@Serializable
+data class PushSubscription(val id: String, val deviceLabel: String? = null, val endpoint: String, val pushService: String? = null)
+
 // ---- Android releases (/android/updates, docs/operations/android-releases.md)
 
 @Serializable

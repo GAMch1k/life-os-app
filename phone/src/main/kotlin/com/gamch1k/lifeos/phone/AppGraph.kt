@@ -24,7 +24,12 @@ import com.gamch1k.lifeos.core.capture.asCaptureApi
 import com.gamch1k.lifeos.core.secrets.KeystoreCipher
 import com.gamch1k.lifeos.core.secrets.TokenStore
 import com.gamch1k.lifeos.core.today.TodaySnapshot
+import com.gamch1k.lifeos.core.wearlink.PhoneWearLinkHost
+import com.gamch1k.lifeos.core.wearlink.WearLinkPhone
 import com.gamch1k.lifeos.phone.capture.CaptureQueue
+import com.gamch1k.lifeos.phone.push.PushManager
+import com.gamch1k.lifeos.phone.today.TodayRepository
+import com.gamch1k.lifeos.phone.today.TodayWidget
 import com.gamch1k.lifeos.phone.update.UpdateManager
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** The app's singletons, built once in [LifeOsApp]. */
@@ -67,6 +73,14 @@ class AppGraph(private val app: Application) {
     val queue = CaptureQueue(app, captures, sender)
     val homeCache = HomeCache(cacheData)
 
+    /** Today for Home, the widget and the watch; changes reach the watch and the widgets. */
+    val today = TodayRepository(client, homeCache, onChanged = ::todayChanged)
+
+    /** The watch link (docs/wear.md): the token store and the relay over this client. */
+    val wearLink = PhoneWearLinkHost(tokens, client)
+
+    val push = PushManager(app, client, settings, scope)
+
     private val foregroundState = MutableStateFlow(false)
 
     /** True while one of our activities is started (visible). */
@@ -98,12 +112,41 @@ class AppGraph(private val app: Application) {
         )
     }
 
-    /** Sign out: the token, the cached Today, the queue with its files, downloaded updates. */
+    /** A token was saved (onboarding, Change token, the 0.1 migration). */
+    fun tokenSaved() {
+        credentialsChanged()
+        scope.launch {
+            queue.retryAuthFailures()
+            push.sync()
+        }
+    }
+
+    /** The watch fetches the token again (a no-op without a watch). */
+    fun credentialsChanged() {
+        scope.launch { WearLinkPhone.notifyCredentialsChanged(app) }
+    }
+
+    /** Tasks or events changed: the watch's Today tile and the widgets refresh. */
+    fun todayChanged() {
+        scope.launch {
+            WearLinkPhone.notifyTodayChanged(app)
+            TodayWidget.refreshAll(app)
+        }
+    }
+
+    /**
+     * Sign out: Life OS forgets this phone's push subscription (while the token
+     * still works), then the token, the cached Today, the queue with its
+     * files and downloaded updates go; the watch and the widgets hear of it.
+     */
     suspend fun signOut() {
+        push.unregister()
         tokens.clear()
-        homeCache.clear()
+        today.clear()
         queue.clear()
         updates.forget()
+        credentialsChanged()
+        TodayWidget.refreshAll(app)
     }
 
     private fun store(name: String) = PreferenceDataStoreFactory.create(produceFile = { app.preferencesDataStoreFile(name) })

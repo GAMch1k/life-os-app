@@ -131,6 +131,7 @@ fun HomeScreen(navigator: Navigator, viewModel: HomeViewModel = viewModel()) {
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
                 item { UpdateBanner(state.update, onAct = { context.graph.updates.act() }) }
+                item { NotificationPrompt() }
                 item { FreshnessLine(state, onSetUp = { navigator.go(Screen.Settings) }) }
                 item {
                     CaptureButtons(
