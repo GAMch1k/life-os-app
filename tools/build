@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Build the Life OS Android apps on this server, inside the builder container.
+#
+#   tools/build                 release: unit tests, signed release APKs of the
+#                               phone and wear apps, signature and package
+#                               checks, then dist/ with the APKs and release.json
+#   tools/build test            unit tests only; no signing material is mounted
+#   tools/build gradle ARGS...  any Gradle invocation in the builder, with the
+#                               signing directory mounted (for debugging)
+#   tools/build image           only build (or reuse) the builder image
+#
+# The host is small (7.7 GiB, no swap) and shared, so:
+#   - the whole run holds /tmp/lifeos-heavy.lock, the lock every heavy job on
+#     this host takes; if another job holds it, this waits, it never bypasses;
+#   - Gradle runs in a container capped at 3 GiB and 2 CPUs, as uid 1000;
+#   - the Gradle cache is the named volume lifeos-android-gradle.
+#
+# Signing: the directory with keystore.properties and the PKCS#12 keystore
+# (default ~/life-os.secrets/android, override with LIFEOS_SIGNING_DIR) is
+# mounted read-only at the same path; Gradle finds it through
+# LIFEOS_KEYSTORE_PROPERTIES. Nothing from it is printed, copied or baked
+# into the image.
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+lock=/tmp/lifeos-heavy.lock
+signing_dir=${LIFEOS_SIGNING_DIR:-$HOME/life-os.secrets/android}
+gradle_volume=lifeos-android-gradle
+image_repo=lifeos-android-builder
+image="$image_repo:$(sha256sum "$repo/tools/builder/Dockerfile" | cut -c1-12)"
+
+die() { echo "tools/build: $*" >&2; exit 1; }
+log() { echo "tools/build: $*" >&2; }
+
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+mode=${1:-release}
+case "$mode" in
+  release | test | image) [[ $# -le 1 ]] || { usage; exit 2; } ;;
+  gradle) shift; [[ $# -ge 1 ]] || { usage; exit 2; } ;;
+  -h | --help | help) usage; exit 0 ;;
+  *) usage; exit 2 ;;
+esac
+
+command -v docker > /dev/null || die "docker is required"
+command -v flock > /dev/null || die "flock is required"
+
+# Hold the shared heavy-job lock for the rest of this script (fd 9 stays open
+# until the script exits, including while docker runs).
+exec 9<> "$lock"
+if ! flock -n 9; then
+  log "waiting for $lock (another heavy job is running)"
+  flock 9
+fi
+log "holding $lock"
+
+ensure_image() {
+  if docker image inspect "$image" > /dev/null 2>&1; then
+    return
+  fi
+  log "building the builder image $image"
+  docker build --tag "$image" "$repo/tools/builder"
+  # Drop builder images made from older versions of the Dockerfile.
+  docker image ls "$image_repo" --format '{{.Repository}}:{{.Tag}}' \
+    | grep -vxF "$image" | xargs -r docker image rm > /dev/null || true
+}
+
+check_signing_dir() {
+  [[ -d $signing_dir ]] \
+    || die "signing directory $signing_dir is missing; release builds must be signed with the release key (set LIFEOS_SIGNING_DIR if it lives elsewhere)"
+  [[ -r $signing_dir/keystore.properties ]] \
+    || die "$signing_dir/keystore.properties is missing or unreadable"
+}
+
+git_commit() {
+  local commit
+  commit=$(git -C "$repo" rev-parse HEAD 2> /dev/null) || { echo unknown; return; }
+  if [[ -n $(git -C "$repo" status --porcelain --untracked-files=normal 2> /dev/null) ]]; then
+    commit="$commit-dirty"
+  fi
+  echo "$commit"
+}
+
+# run_builder <mount-signing: yes|no> <command...>
+run_builder() {
+  local mount_signing=$1
+  shift
+  local args=(
+    --rm --init
+    --name "lifeos-android-build-$$"
+    --memory 3g --memory-swap 3g --cpus 2
+    --user 1000:1000
+    --env TZ=UTC
+    --env "LIFEOS_GIT_COMMIT=$(git_commit)"
+    --volume "$gradle_volume:/gradle"
+    --volume "$repo:/workspace"
+    --workdir /workspace
+  )
+  if [[ $mount_signing == yes ]]; then
+    check_signing_dir
+    args+=(
+      --volume "$signing_dir:$signing_dir:ro"
+      --env "LIFEOS_KEYSTORE_PROPERTIES=$signing_dir/keystore.properties"
+    )
+  fi
+  docker run "${args[@]}" "$image" "$@"
+}
+
+start=$SECONDS
+ensure_image
+case "$mode" in
+  image) ;;
+  test) run_builder no tools/builder/in-container test ;;
+  release) run_builder yes tools/builder/in-container release ;;
+  gradle) run_builder yes ./gradlew "$@" ;;
+esac
+log "done in $((SECONDS - start)) s"

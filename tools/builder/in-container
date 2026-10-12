@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Runs inside the builder container; start it through tools/build, not directly.
+#
+#   in-container test     unit tests
+#   in-container release  unit tests, signed release APKs, checks, dist/
+set -euo pipefail
+
+# The release signing certificate (public information, not a secret).
+expected_cert_sha256=ABA979EC4A64CC646036BAF6C9764A54635547BCC2583C59BB6AE33A8D1EEF9F
+application_id=com.gamch1k.lifeos
+
+die() { echo "in-container: $*" >&2; exit 1; }
+
+gradle() { ./gradlew --no-daemon --console=plain "$@"; }
+
+# Memory of this container, sampled every second from its cgroup:
+#   process memory = "anon" (JVM heaps, metaspace, native memory of every process);
+#   working set    = usage minus inactive page cache (what `docker stats` shows);
+#   cgroup peak    = memory.peak, which also counts the page cache of every file
+#                    read or written, so it climbs to the limit while staying harmless.
+cgroup=/sys/fs/cgroup
+peaks=/tmp/memory-peaks
+sample_memory() {
+  local peak_anon=0 peak_ws=0 anon inactive current
+  while sleep 1; do
+    anon=$(awk '$1 == "anon" { print $2 }' "$cgroup/memory.stat")
+    inactive=$(awk '$1 == "inactive_file" { print $2 }' "$cgroup/memory.stat")
+    current=$(cat "$cgroup/memory.current")
+    if ((anon > peak_anon)); then
+      peak_anon=$anon
+      ps -eo rss=,comm= --sort=-rss | head -n 5 | awk '{ printf "%s %d MiB; ", $2, $1 / 1024 }' > "$peaks.ps"
+    fi
+    ((current - inactive > peak_ws)) && peak_ws=$((current - inactive))
+    echo "$peak_anon $peak_ws" > "$peaks"
+  done
+}
+report_memory() {
+  kill "$sampler" 2> /dev/null || true
+  [[ -r $peaks ]] || return 0
+  local anon ws peak
+  read -r anon ws < "$peaks"
+  peak=$(cat "$cgroup/memory.peak" 2> /dev/null || echo 0)
+  echo "memory: peak process memory $((anon / 1048576)) MiB, peak working set $((ws / 1048576)) MiB," \
+    "cgroup peak incl. page cache $((peak / 1048576)) MiB, limit $(($(cat "$cgroup/memory.max") / 1048576)) MiB"
+  echo "largest processes at the process-memory peak: $(cat "$peaks.ps" 2> /dev/null)"
+}
+if [[ -r $cgroup/memory.stat ]]; then
+  sample_memory &
+  sampler=$!
+  trap report_memory EXIT
+fi
+
+# Reads one field out of `aapt2 dump badging` output.
+badging_field() { # <badging> <regex with one group>
+  sed -n "s/$2/\1/p" <<< "$1" | head -n 1
+}
+
+verify_and_copy() { # <module> -> prints the release.json entry
+  local module=$1 apk badging package version_code version_name min_sdk certs signers cert dest
+  apk="$module/build/outputs/apk/release/$module-release.apk"
+  [[ -f $apk ]] || die "$apk was not built"
+
+  badging=$(aapt2 dump badging "$apk")
+  package=$(badging_field "$badging" "^package: name='\([^']*\)'.*")
+  version_code=$(badging_field "$badging" "^package: .* versionCode='\([0-9]*\)'.*")
+  version_name=$(badging_field "$badging" "^package: .* versionName='\([^']*\)'.*")
+  min_sdk=$(badging_field "$badging" "^minSdkVersion:'\([0-9]*\)'.*")
+  [[ -n $min_sdk ]] || min_sdk=$(badging_field "$badging" "^sdkVersion:'\([0-9]*\)'.*")
+  [[ $package == "$application_id" ]] || die "$apk has applicationId '$package', expected $application_id"
+  [[ -n $version_code && -n $version_name && -n $min_sdk ]] || die "could not read the version of $apk"
+
+  apksigner verify --min-sdk-version "$min_sdk" "$apk" || die "$apk does not verify"
+  certs=$(apksigner verify --print-certs "$apk")
+  signers=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest:' <<< "$certs" || true)
+  cert=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certs" | tr 'a-f' 'A-F')
+  [[ $signers == 1 ]] || die "$apk has $signers signers, expected exactly one"
+  [[ $cert == "$expected_cert_sha256" ]] || die "$apk is signed with $cert, not the release key"
+
+  dest="dist/lifeos-$module-$version_name-$version_code.apk"
+  cp "$apk" "$dest"
+  echo "$module: $dest, $package $version_name ($version_code), minSdk $min_sdk, release key OK" >&2
+
+  printf '    "%s": {\n' "$module"
+  printf '      "file": "%s",\n' "${dest#dist/}"
+  printf '      "applicationId": "%s",\n' "$package"
+  printf '      "versionCode": %s,\n' "$version_code"
+  printf '      "versionName": "%s",\n' "$version_name"
+  printf '      "minSdk": %s,\n' "$min_sdk"
+  printf '      "sha256": "%s",\n' "$(sha256sum "$dest" | cut -d' ' -f1)"
+  printf '      "size": %s,\n' "$(stat -c %s "$dest")"
+  printf '      "builtAt": "%s",\n' "$built_at"
+  printf '      "gitCommit": "%s"\n' "${LIFEOS_GIT_COMMIT:-unknown}"
+  printf '    }'
+}
+
+case "${1:-}" in
+  test)
+    gradle :core:testDebugUnitTest
+    ;;
+  release)
+    [[ -n ${LIFEOS_KEYSTORE_PROPERTIES:-} ]] || die "LIFEOS_KEYSTORE_PROPERTIES is not set"
+    gradle :core:testDebugUnitTest :phone:assembleRelease :wear:assembleRelease
+    built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    mkdir -p dist
+    rm -f dist/*.apk dist/release.json
+    phone=$(verify_and_copy phone)
+    wear=$(verify_and_copy wear)
+    printf '{\n  "schema": 1,\n  "apps": {\n%s,\n%s\n  }\n}\n' "$phone" "$wear" > dist/release.json
+    echo "wrote dist/release.json" >&2
+    ls -l dist >&2
+    ;;
+  *)
+    die "usage: in-container test|release"
+    ;;
+esac

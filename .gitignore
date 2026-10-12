@@ -10,6 +10,12 @@ captures/
 # Signing material never lives in the repository
 *.jks
 *.keystore
+*.p12
 keystore.properties
 # OS
 .DS_Store
+
+# Release output of tools/build
+dist/
+# Kotlin compiler session files
+.kotlin/
