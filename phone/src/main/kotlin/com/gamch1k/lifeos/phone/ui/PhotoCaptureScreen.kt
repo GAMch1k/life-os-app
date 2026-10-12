@@ -1,6 +1,7 @@
 package com.gamch1k.lifeos.phone.ui
 
 import android.app.Application
+import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Size
@@ -100,6 +101,8 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun caption(text: String) = state.update { it.copy(caption = text) }
 
+    fun fail(message: String) = state.update { it.copy(error = message) }
+
     fun send(onQueued: () -> Unit) {
         val current = state.value
         if (current.photos.isEmpty() || current.preparing) return
@@ -156,7 +159,12 @@ fun PhotoCaptureScreen(navigator: Navigator, camera: Boolean, viewModel: PhotoVi
     fun openCamera() {
         val target = viewModel.cameraTarget()
         pendingCamera = target
-        takePicture.launch(target)
+        try {
+            takePicture.launch(target)
+        } catch (_: ActivityNotFoundException) {
+            pendingCamera = null
+            viewModel.fail("This phone has no camera app; choose from the gallery instead.")
+        }
     }
 
     fun openGallery() = if (remaining > 1) pickMany.launch(images) else pickOne.launch(images)
