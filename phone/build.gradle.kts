@@ -33,6 +33,18 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        resources {
+            // BouncyCastle's Java resources: post-quantum tables (1.2 MB) and
+            // certificate-path messages. The watch setup uses neither.
+            excludes += listOf(
+                "org/bouncycastle/pqc/**",
+                "org/bouncycastle/pkix/CertPathReviewerMessages*.properties",
+                "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

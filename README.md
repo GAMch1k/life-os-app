@@ -22,7 +22,7 @@ Main versions: AGP 9.4.1 (built-in Kotlin), Kotlin 2.4.21, Gradle 9.7.1, Compose
 
 The watch setup (P19-06, phone only) uses [libadb-android](https://github.com/MuntashirAkon/libadb-android) 3.1.1 (`com.github.MuntashirAkon:libadb-android`, from JitPack). It is dual-licensed GPL-3.0-or-later or Apache-2.0; **we use it under Apache-2.0**. It brings SPAKE2 (`com.github.MuntashirAkon.spake2-java:spake2-android` 2.2.1, LGPL-3.0, a small JNI library linked dynamically) and BouncyCastle 1.81 (MIT); the phone adds Conscrypt 2.7.0 (`org.conscrypt:conscrypt-android`, Apache-2.0), which pairing needs for TLS 1.3's keying-material export, and BouncyCastle's `bcpkix` for the ADB key's certificate. JitPack is a repository for exactly these two groups (`exclusiveContent` in `settings.gradle.kts`); everything else comes from Google and Maven Central.
 
-The phone APK is about 12 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, Conscrypt's for about 2.7 MB, and the APK carries only arm64 code. The wear APK is about 15 MB: it embeds Cronet too (for calls without the phone), for arm64 and 32-bit ARM, which is 11 MB of it.
+The phone APK is about 15.5 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, and since 0.4.0 Conscrypt's for 2.7 MB (the watch setup; BouncyCastle's unused resources are left out); the APK carries only arm64 code. The wear APK is about 15 MB: it embeds Cronet too (for calls without the phone), for arm64 and 32-bit ARM, which is 11 MB of it.
 
 ## Building
 
