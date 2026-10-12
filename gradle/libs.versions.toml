@@ -16,6 +16,11 @@ coreKtx = "1.19.1"
 lifecycle = "2.11.0"
 coroutines = "1.11.0"
 cronet = "500.1.0"      # bundles Chromium 155.0.8059.16
+serialization = "1.11.0"
+datastore = "1.2.1"
+work = "2.11.2"
+browser = "1.10.0"
+navigation3 = "1.2.0"
 junit = "4.13.2"
 
 [libraries]
@@ -35,6 +40,16 @@ wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation",
 wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "wearCompose" }
 
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# Chrome Custom Tabs: the Dashboard opens in Chrome, which has the Access login and ECH.
+androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
+androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycle" }
+compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
 
 # Embedded Cronet: the whole Chromium network stack inside the APK
 # (cronet-embedded is now an empty alias of cronet-bundled).
@@ -46,3 +61,4 @@ junit = { module = "junit:junit", version.ref = "junit" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

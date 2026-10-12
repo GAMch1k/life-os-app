@@ -3,6 +3,7 @@ package com.gamch1k.lifeos.core.netcheck
 import android.content.Context
 import android.os.SystemClock
 import androidx.annotation.OptIn
+import com.gamch1k.lifeos.core.api.NetErrors
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -184,41 +185,9 @@ internal object CronetProbe {
     }
 
     private fun describe(error: CronetException): String = when (error) {
-        is NetworkException -> "${netErrorName(error.cronetInternalErrorCode)} (${error.cronetInternalErrorCode})"
+        is NetworkException -> NetErrors.describe(error.cronetInternalErrorCode)
         else -> error.message ?: error.javaClass.simpleName
     }
-
-    /** Chromium net error names (net/base/net_error_list.h) for the codes this check may meet. */
-    private val netErrors = mapOf(
-        -2 to "ERR_FAILED",
-        -7 to "ERR_TIMED_OUT",
-        -10 to "ERR_ACCESS_DENIED",
-        -21 to "ERR_NETWORK_CHANGED",
-        -100 to "ERR_CONNECTION_CLOSED",
-        -101 to "ERR_CONNECTION_RESET",
-        -102 to "ERR_CONNECTION_REFUSED",
-        -103 to "ERR_CONNECTION_ABORTED",
-        -104 to "ERR_CONNECTION_FAILED",
-        -105 to "ERR_NAME_NOT_RESOLVED",
-        -106 to "ERR_INTERNET_DISCONNECTED",
-        -107 to "ERR_SSL_PROTOCOL_ERROR",
-        -109 to "ERR_ADDRESS_UNREACHABLE",
-        -113 to "ERR_SSL_VERSION_OR_CIPHER_MISMATCH",
-        -118 to "ERR_CONNECTION_TIMED_OUT",
-        -137 to "ERR_NAME_RESOLUTION_FAILED",
-        -138 to "ERR_NETWORK_ACCESS_DENIED",
-        -159 to "ERR_SSL_UNRECOGNIZED_NAME_ALERT",
-        -183 to "ERR_ECH_NOT_NEGOTIATED",
-        -184 to "ERR_ECH_FALLBACK_CERTIFICATE_INVALID",
-        -200 to "ERR_CERT_COMMON_NAME_INVALID",
-        -201 to "ERR_CERT_DATE_INVALID",
-        -202 to "ERR_CERT_AUTHORITY_INVALID",
-        -324 to "ERR_EMPTY_RESPONSE",
-        -356 to "ERR_QUIC_PROTOCOL_ERROR",
-        -803 to "ERR_DNS_TIMED_OUT",
-    )
-
-    private fun netErrorName(code: Int): String = netErrors[code] ?: "net error"
 
     /** Host and path of a URL, without its query (which may carry tokens). */
     fun hostAndPath(url: String): String = try {

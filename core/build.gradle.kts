@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -20,7 +21,10 @@ android {
 
 dependencies {
     implementation(libs.cronet.bundled)
-    implementation(libs.kotlinx.coroutines.android)
+    api(libs.kotlinx.coroutines.android)
+    // The client's DTOs and the stores are part of core's API for the apps.
+    api(libs.kotlinx.serialization.json)
+    api(libs.androidx.datastore.preferences)
 
     testImplementation(libs.junit)
 }
