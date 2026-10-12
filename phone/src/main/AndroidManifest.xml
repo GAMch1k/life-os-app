@@ -20,6 +20,20 @@
             </intent-filter>
         </activity>
 
+        <!-- The link to the watch app (docs/wear.md): token handoff and API relay. -->
+        <service
+            android:name=".wearlink.PhoneWearLinkService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>
