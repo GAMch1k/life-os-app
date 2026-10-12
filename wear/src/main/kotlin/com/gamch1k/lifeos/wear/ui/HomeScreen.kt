@@ -24,6 +24,7 @@ import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import com.gamch1k.lifeos.wear.R
 import com.gamch1k.lifeos.wear.capture.Capture
 import com.gamch1k.lifeos.wear.capture.CaptureState
@@ -37,6 +38,7 @@ fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onToday: () -> Un
     val captures by viewModel.captures.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val use24Hour = DateFormat.is24HourFormat(context)
     val listState = rememberTransformingLazyColumnState()
@@ -57,6 +59,17 @@ fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onToday: () -> Un
                         stringResource(R.string.token_missing) + " · " + stringResource(R.string.token_fetch_no_phone),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            update?.takeIf { it.status == WatchUpdateStatus.WAITING_FOR_CONFIRMATION }?.let { waiting ->
+                item {
+                    Button(
+                        onClick = viewModel::installUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = { Icon(painterResource(R.drawable.ic_refresh), contentDescription = null) },
+                        label = { Text(stringResource(R.string.install_update)) },
+                        secondaryLabel = { Text("Life OS ${waiting.versionName}") },
                     )
                 }
             }

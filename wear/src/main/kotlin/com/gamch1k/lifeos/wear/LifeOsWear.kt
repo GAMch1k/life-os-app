@@ -1,8 +1,10 @@
 package com.gamch1k.lifeos.wear
 
+import android.app.Activity
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.wear.tiles.TileService
 import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
 import com.gamch1k.lifeos.wear.capture.CaptureStore
@@ -19,6 +21,8 @@ import com.gamch1k.lifeos.wear.net.RoutingTransport
 import com.gamch1k.lifeos.wear.tile.TodayTileService
 import com.gamch1k.lifeos.wear.today.TodayRefreshWorker
 import com.gamch1k.lifeos.wear.today.TodayRepository
+import com.gamch1k.lifeos.wear.update.SelfUpdater
+import com.gamch1k.lifeos.wear.update.WatchUpdateStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,9 +35,12 @@ class LifeOsWear : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(graph.foregroundTracker)
         TodayRefreshWorker.schedulePeriodic(this)
         // First start, or the Keystore lost its key: ask the phone for the token right away.
         if (graph.credentials.current == null) graph.scope.launch { graph.refreshCredentials() }
+        // After an update through the phone: tell it how it went (P19-06).
+        graph.scope.launch { graph.selfUpdater.onAppStart() }
     }
 
     companion object {
@@ -54,6 +61,13 @@ class WearGraph(private val app: Context) {
 
     val captureStore = CaptureStore(File(app.filesDir, "captures"))
     val captureUploader = CaptureUploader(captureStore, api, onAuthRefused = { refreshCredentials() })
+
+    /** True while one of the app's activities is started (visible). */
+    val foregroundTracker = ForegroundTracker()
+
+    /** Updates through the phone (P19-06). */
+    val updateStore = WatchUpdateStore(app)
+    val selfUpdater = SelfUpdater(app, updateStore, phoneLink, foreground = { foregroundTracker.started })
 
     val today = TodayRepository(
         cacheFile = File(app.filesDir, "today.json"),
@@ -83,4 +97,26 @@ class WearGraph(private val app: Context) {
             // No tile or complication in use: nothing to redraw.
         }
     }
+}
+
+/** Counts started activities, so an update's confirmation opens directly while the app is on screen. */
+class ForegroundTracker : Application.ActivityLifecycleCallbacks {
+    @Volatile
+    private var count = 0
+
+    val started: Boolean get() = count > 0
+
+    override fun onActivityStarted(activity: Activity) {
+        count++
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        count = (count - 1).coerceAtLeast(0)
+    }
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+    override fun onActivityResumed(activity: Activity) = Unit
+    override fun onActivityPaused(activity: Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+    override fun onActivityDestroyed(activity: Activity) = Unit
 }
