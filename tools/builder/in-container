@@ -96,7 +96,7 @@ badging_field() { # <badging> <regex with one group>
 }
 
 verify_and_copy() { # <module> -> prints the release.json entry
-  local module=$1 apk badging package version_code version_name min_sdk certs signers cert dest
+  local module=$1 apk resources badging package version_code version_name min_sdk certs signers cert dest
   apk="$module/build/outputs/apk/release/$module-release.apk"
   [[ -f $apk ]] || die "$apk was not built"
 
@@ -117,8 +117,11 @@ verify_and_copy() { # <module> -> prints the release.json entry
   [[ $cert == "$expected_cert_sha256" ]] || die "$apk is signed with $cert, not the release key"
   # The phone and the watch find each other by this array, which Play services
   # reads by name; resource shrinking removed it once (0.4.0).
-  aapt2 dump resources "$apk" | grep -q 'array/android_wear_capabilities' \
-    || die "$apk lacks array/android_wear_capabilities (res/raw/keep.xml must keep it)"
+  # (Read in full first: grep -q would close the pipe early, and with pipefail
+  # aapt2's broken pipe fails the check even when the array is there.)
+  resources=$(aapt2 dump resources "$apk")
+  grep -q 'array/android_wear_capabilities' <<< "$resources" \
+    || die "$apk lacks array/android_wear_capabilities (resource shrinking must stay off, see build.gradle.kts)"
 
   dest="dist/lifeos-$module-$version_name-$version_code.apk"
   cp "$apk" "$dest"
