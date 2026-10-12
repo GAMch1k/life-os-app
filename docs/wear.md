@@ -4,7 +4,8 @@ The watch app for the owner's Galaxy Watch 8 (One UI 8 Watch, Wear OS 6). First 
 
 - **voice capture**: tap a tile, the complication, the app, or double-press the Home key; speak; tap Send. The recording goes to Life OS Voice and comes back as an Inbox item;
 - **a "Today" tile and a next-event complication**;
-- **notifications with Done and Snooze**, bridged from the phone app (P18-05). The watch app adds nothing of its own there.
+- **notifications with Done and Snooze**, bridged from the phone app (P18-05). The watch app adds nothing of its own there;
+- **install and updates through the phone** (P19-06): no Play Store, no computer, and ADB only once ([Install and updates](#install-and-updates)).
 
 No AI runs on the watch: it records and uploads, Life OS does the rest.
 
@@ -20,6 +21,10 @@ No AI runs on the watch: it records and uploads, Life OS does the rest.
 | `wear/…/today/` | Today's events and tasks: fetch, cache, layout rules. |
 | `wear/…/tile/`, `wear/…/complication/` | The Capture and Today tiles, the next-event complication. |
 | `wear/…/ui/` | The app's screens (Compose for Wear OS Material 3). |
+| `wear/…/update/` | The watch's end of updates through the phone: version answer, offer, transfer, checks, install, result. |
+| `core/…/update/WatchUpdateRules.kt`, `ApkRules.kt` | When the phone pushes, what the watch accepts, and the APK checks both sides run. |
+| `core/…/watchsetup/` | The one-time bootstrap's state machine and input parsing, without Android. |
+| `phone/…/watch/`, `phone/…/watchsetup/` | The phone's update push, and the bootstrap over ADB (libadb-android). |
 
 Both apps are `com.gamch1k.lifeos` and signed with the same key, so the Data Layer connects only these two apps. The phone declares the capability `lifeos_phone_relay` (`phone/src/main/res/values/wear.xml`), the watch `lifeos_watch`.
 
@@ -160,15 +165,89 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
 
 **The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over the phone's token through `ServiceTokenStore` (a read-only view of the token store, which holds the token entered at the phone app's first run or under Settings → **Change token**) and relay nothing (`WearRelay.UNAVAILABLE`).
 
+## Install and updates
+
+The watch app is not in the Play Store, and the owner has no computer at hand. So the phone app installs it, once, as an ADB client over the watch's Wireless debugging, and then sends it every new version over the Data Layer; the watch installs those itself, without a prompt.
+
+### The one-time setup (the owner)
+
+On the phone: **Settings › Watch › Set up the watch app**, then **Start**. The phone first downloads the newest wear APK from Life OS (`apps.wear` of `/android/updates`) and checks it like its own update: size, SHA-256, package, version and the release key. Only then does it ask for the pairing code, which expires when the watch's pairing screen closes.
+
+The steps, with One UI Watch's menu names (from Samsung's documentation; not yet checked on the Galaxy Watch 8 itself):
+
+1. **Same Wi-Fi.** On the watch: Settings › Connections › Wi-Fi, join the network the phone is on. Keep the watch's screen on during the setup: Wear OS turns Wireless debugging off whenever the watch's Wi-Fi drops.
+2. **Developer options.** Settings › About watch › Software information: tap **Software version** about 5 times, until the watch says Developer mode is on.
+3. **Debugging.** Settings › Developer options: turn on **ADB debugging**, then **Wireless debugging**, and allow it on this network (**Always allow on this network**).
+4. **Pair.** Wireless debugging › **Pair new device**. The watch shows a **Wi-Fi pairing code** and an **IP address & port**. Type both into the phone and tap **Pair and install**.
+5. The phone pairs, finds the connection port by itself (mDNS, `_adb-tls-connect._tcp`) or asks for it (the port under **IP address & port** on the main Wireless debugging screen, not the pairing port), and then, in about a minute:
+   - reads `ro.product.cpu.abilist` (the watch's ABIs, shown under Settings › Watch);
+   - installs the APK (`cmd package install -S <size>`, streamed);
+   - runs `appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow`: "Install unknown apps" for Life OS, which One UI Watch has no screen for, and which silent self-updates need;
+   - grants the watch app's notifications (`pm grant … POST_NOTIFICATIONS`), for the update's one-tap confirmation and the recording notice;
+   - starts the watch app once (it fetches the token from the phone);
+   - disconnects, and waits until the watch app answers over the Data Layer with the new version.
+6. **Turn Wireless debugging off** again: Settings › Developer options › Wireless debugging. ADB debugging can go off too. Nothing later needs them.
+
+**Paired before?** The phone keeps its ADB key (RSA-2048; the private key encrypted with an AES-256-GCM key in the phone's Android Keystore, in the app's private storage, never backed up). The watch lists it under Wireless debugging › Paired devices as **Life OS phone**. As long as it is there, a rescue (a reset watch app, a lost permission) needs no new code: turn Wireless debugging on, and use **Connect and install** with the IP address from the Wireless debugging screen (the port is optional).
+
+What the setup says when something is off:
+
+| Problem | What the phone says, and what to do |
+|---|---|
+| The phone is not on Wi-Fi | Connect it to the watch's Wi-Fi. |
+| Wrong code | The watch refused the code: check the six digits, or tap Pair new device again for a new code. |
+| Pairing expired | Nothing answers on the pairing port: the pairing screen closed (and its code with it), or the port is another. Tap Pair new device again. |
+| Wrong network | No answer, and the watch's address is outside the phone's Wi-Fi subnet: connect both to the same Wi-Fi. |
+| No answer, same subnet | The watch's Wi-Fi is asleep, or Wireless debugging went off: wake the watch and check. |
+| Port changed | Nothing answers on the connection port: Wireless debugging picks a new one each time it is turned on. Type the one it shows now. |
+| Not paired | The watch doesn't trust the phone's key (any more): pair again. |
+| Install failed | The installer's code and a plain reason, such as `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (a Life OS signed with another key is installed: uninstall it on the watch first). **Try again** reconnects and goes on. A watch that already has a newer version keeps it. |
+| Not allowed | `appops get` doesn't say `allow` after the grant. |
+| No answer over the Data Layer | Installed, but the watch app hasn't answered over Bluetooth within a minute: open Life OS on the watch, keep the phone close, **Try again** (only the check runs again). |
+
+### Updates through the phone
+
+```mermaid
+sequenceDiagram
+  participant P as Phone app
+  participant L as Life OS /android/updates
+  participant W as Watch app
+  P->>W: /lifeos/watch-info (request)
+  W-->>P: version, API level, ABIs, capabilities, install permission, battery, last result
+  P->>L: manifest; apps.wear newer?
+  P->>L: download the wear APK (resumable), check size, SHA-256, package, version, release key
+  P->>W: /lifeos/apk-offer (version, size, SHA-256)
+  W-->>P: accepted, or why not
+  P->>W: /lifeos/apk-transfer channel: header, chunks, end
+  W-->>P: received (or refused, and why)
+  W->>W: PackageInstaller, USER_ACTION_NOT_REQUIRED
+  W->>P: /lifeos/watch-report on its next start (installed, failed, waiting)
+```
+
+- **When the phone checks**: once a day on an unmetered network (`UpdateWorker`, before the phone's own update, which may end the process), when the phone app opens (at most every 6 hours), when the watch app reports in (after an install, at most once a minute), and on **Settings › Watch › Update now**. Automatic checks download the 15 MB APK only on an unmetered network; Update now downloads on any.
+- **The version question** (`/lifeos/watch-info`, `MessageClient` request): `WatchInfoRequest {v, id}` → `WatchInfo {v, id, versionCode, versionName, sdkInt, abis, capabilities, canInstallPackages, battery {percent, charging}, lastUpdate}`. The capability `apk_transfer_v1` says the watch takes updates; a watch app older than 0.4.0 doesn't answer at all, and the phone says the setup is needed.
+- **The phone's rules** (`WatchUpdateRules.plan`): push only a published `apps.wear` with a higher versionCode, a usable hash and URL, and a `minSdk` the watch meets; never while the watch reports less than 20 % battery without charging; after a push, wait 10 minutes for the watch's report; after a failure, back off 30 minutes, then 2, 8 and 24 hours (a new version starts over; an install that failed on the watch counts too); a confirmation the watch waits for is not pushed again. **Update now** skips the backoff and the wait, but never the battery rule or 30 seconds between two installs.
+- **The offer** (`/lifeos/apk-offer`): `ApkOffer {v, id, versionCode, versionName, size, sha256}` → `ApkOfferReply {v, id, accepted, error {code, message}, retryAfterSeconds}`. The watch refuses (in this order) a broken offer (`bad_request`), one over 64 MiB (`too_large`), a version not higher than its own (`not_newer`), no "Install unknown apps" (`no_install_permission`), a battery under 20 % without charging (`low_battery`), too little free space (`storage`), another update running (`busy`), and a second install within Android's 30 seconds (35 s with margin; `throttled`, with `retryAfterSeconds`). Throttled, busy and low battery aren't counted as failures.
+- **The transfer** (`/lifeos/apk-transfer`, `ChannelClient`, `ApkTransferCodec`): a header frame (`u32` length, then `ApkTransferHeader {v, id, versionCode, size, sha256}` as JSON, which must match the accepted offer, valid for 10 minutes), then chunks (`i32` length and that many bytes, at most 256 KiB each; the phone sends 64 KiB), then `0` for the end, or `-1` when the phone gives up. The watch writes the bytes to its private storage and hashes them as they arrive: more bytes than announced stop the transfer at once, fewer or another SHA-256 are refused at the end, and the partial file is deleted. Its answer is one frame, `ApkTransferResult {v, id, received, error}`.
+- **The watch's checks** before installing (`ApkRules`, the same on the phone): the archive must be `com.gamch1k.lifeos`, signed by exactly the certificates the installed app is signed with, at the announced versionCode, and higher than its own (no downgrade, no reinstall). Android checks the signature again when it installs.
+- **The install**: a `PackageInstaller` session with `setRequireUserAction(USER_ACTION_NOT_REQUIRED)`. It is silent because the app updates itself, declares `UPDATE_PACKAGES_WITHOUT_USER_ACTION`, holds `REQUEST_INSTALL_PACKAGES` with "Install unknown apps" allowed, and targets API 36 (Android 16 wants 34 or higher). The watch remembers when it committed, so it never starts a second install within 30 seconds.
+- **When Android asks anyway** (`STATUS_PENDING_USER_ACTION`): the confirmation opens at once if Life OS is on the watch's screen; otherwise a notification **Life OS x.y is ready · Tap to install** opens it, and Home shows **Install update**, which commits the stored APK again with the app on screen.
+- **After the update** Android restarts the app (`MY_PACKAGE_REPLACED`). On its next start the new version records "installed", deletes the APK and sends a `WatchInfo` to the phone on `/lifeos/watch-report` (one-way message); a failure, a refusal or a waiting confirmation is reported at once. Until the phone has it, the watch sends it again whenever the phone comes into reach.
+- **What the owner sees**: on the phone, Settings › Watch shows the watch app's version and when it was last seen, the last update's result, what the phone is doing (downloading, sending, waiting and why), **Update now**, and the watch's ABIs; on the watch, Connection shows the last update or that the setup's permission is missing.
+
+### The watch's ABIs
+
+The wear APK carries embedded Cronet for `arm64-v8a` and `armeabi-v7a` (11 MB of its 15 MB). The setup records `ro.product.cpu.abilist`, and every `WatchInfo` carries `Build.SUPPORTED_ABIS`. Settings › Watch then says which single ABI a watch-only APK would need (`WatchAbi.smallestApkAbi`): `arm64-v8a` when the list has it, else `armeabi-v7a`, else none (keep both). Nothing changes on its own: dropping an ABI is a change to `wear/build.gradle.kts` (`ndk.abiFilters`), made once the owner has seen the list.
+
 ## Setting up the watch (the owner)
 
-1. **Install** the wear APK. Until P19-06 brings installs through the phone, this is ADB over Wi-Fi: on the watch, Settings › Developer options › Wireless debugging, pair, then `adb install -r lifeos-wear-<version>.apk`. Turn Wireless debugging off again afterwards.
+1. **Install** the watch app from the phone: Settings › Watch › **Set up the watch app** ([Install and updates](#install-and-updates)). Updates then come through the phone by themselves. (By hand, with a computer, `adb install -r lifeos-wear-<version>.apk` over Wireless debugging still works, but then "Install unknown apps" must be allowed with `adb shell appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow` for silent updates.)
 2. **Token**: the phone app must hold its service token, entered at its first run or under Settings → **Change token**; the watch needs none of its own. Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
 3. **Microphone**: the first recording asks for it. After "Don't allow", the recording screen offers **Open settings**.
 4. **Home key**: Settings › Advanced features › Customize buttons (Customize keys on older One UI Watch versions) › Home key › Double press › choose **Capture**. "Capture" is the app's second entry in the app list and opens straight into recording; choosing "Life OS" opens Home instead.
 5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same.
 6. **Complication**: touch and hold the watch face › Customize › Complications, pick a slot, then **Life OS next event**. Short-text slots show the time and title, long ones `14:30 Dentist`, small round ones a microphone. Some Samsung watch faces offer no slots for other apps.
-7. Optional, to save 4–7 MB: `adb shell getprop ro.product.cpu.abilist` tells whether the watch runs 64-bit (`arm64-v8a`) or 32-bit ARM apps. The APK carries both until we know.
+7. The watch's ABIs: the setup reads them; Settings › Watch shows them and which single ABI a smaller watch APK would need ([The watch's ABIs](#the-watchs-abis)). The APK carries both until the owner decides.
 
 ## Tests and build
 
@@ -177,7 +256,10 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
   - `core/…/capture/`: the phone's queue, including Retry: a new job attempt after a failed Voice job or a 409, the same key otherwise;
   - `wear/…/net/`: the watch's relay against the phone's real handler, end to end, and the routing rules;
   - `wear/…/capture/`: the queue's state machine and idempotency (job attempts, their keys and metadata, Retry), and the uploader against a fake Life OS (the multipart body, polling to In Inbox, waiting, backoff, refusals, a refused token, a restart, Retry after a failed job, a 409 or a lost reply);
-  - `wear/…/today/`: parsing, the date-only rule, the tile's rows, the timeline change times, the complication's timeline, and the repository's queries and cache.
+  - `wear/…/today/`: parsing, the date-only rule, the tile's rows, the timeline change times, the complication's timeline, and the repository's queries and cache;
+  - `core/…/update/`: the wear entry of the manifest, the phone's push rules (version, battery, the wait for a report, backoff, Update now, a waiting confirmation), the watch's offer rules (newer only, permission, battery, space, busy, 30 seconds), the APK checks (package, certificate, announced version, downgrade), and the ABI advice;
+  - `core/…/wearlink/WatchUpdateProtocolTest`: the update messages (round trips, wire names, a 0.3 watch's answer, unknown codes, versions), and the transfer (chunks, progress, SHA-256, too many and too few bytes, the sender's abort, a stream cut mid-chunk, the header's limits);
+  - `core/…/watchsetup/`: the bootstrap's state machine with ADB faked (the whole run, a failed download, typos, no Wi-Fi, wrong code, an expired pairing, the wrong network, no mDNS, a changed port, a lost pairing, a rescue without pairing, a refused install and Try again, a newer version on the watch, a refused permission, optional steps, a broken connection, a watch app that answers late), and the parsing of addresses, codes, the subnet and the shell's answers.
 - `tools/build` builds the signed `lifeos-wear-<version>.apk` (about 15 MB: embedded Cronet's native code for two ABIs is 11 MB of it).
 
-Not tested automatically: the Data Layer between the real phone and watch, recording on the watch's microphone, the tile and complication rendering. P19-05 is the acceptance on the Galaxy Watch 8.
+Not tested automatically: the Data Layer between the real phone and watch, recording on the watch's microphone, the tile and complication rendering, and everything of P19-06 that needs the devices: pairing and installing over the watch's Wireless debugging (libadb-android against One UI Watch's adbd), mDNS discovery, `appops` on One UI Watch, a channel transfer of 15 MB over Bluetooth, and whether the silent self-update really stays silent on the Galaxy Watch 8. P19-05 is the acceptance on the watch.

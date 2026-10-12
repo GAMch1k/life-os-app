@@ -8,9 +8,9 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 
 | Path | What |
 |---|---|
-| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules, the phone–watch link, and the network check. Most unit tests live here; the wear app's are in `wear/src/test`. |
-| `phone/` | The phone app ([below](#the-phone-app)): onboarding, Today, capture with an offline queue, self-update, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
-| `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the next-event complication ([docs/wear.md](docs/wear.md)). |
+| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules (the phone's and the watch's), the phone–watch link, the watch setup's state machine, and the network check. Most unit tests live here; the wear app's are in `wear/src/test`. |
+| `phone/` | The phone app ([below](#the-phone-app)): onboarding, Today, capture with an offline queue, self-update, the watch app's setup and updates, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
+| `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the next-event complication, updates through the phone ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
 | `version.properties` | The one version of both apps. |
@@ -20,7 +20,9 @@ Both apps use the `applicationId` **`com.gamch1k.lifeos`**. Phone: minSdk 34, ta
 
 Main versions: AGP 9.4.1 (built-in Kotlin), Kotlin 2.4.21, Gradle 9.7.1, Compose BOM 2026.09.00, Compose for Wear OS Material 3 1.7.1, Cronet 500.1.0 (`org.chromium.net:cronet-bundled`, Chromium 155.0.8059.16), JDK 21.
 
-The phone APK is about 10 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, and the APK carries only arm64 code. The wear APK is about 15 MB: it embeds Cronet too (for calls without the phone), for arm64 and 32-bit ARM, which is 11 MB of it.
+The watch setup (P19-06, phone only) uses [libadb-android](https://github.com/MuntashirAkon/libadb-android) 3.1.1 (`com.github.MuntashirAkon:libadb-android`, from JitPack). It is dual-licensed GPL-3.0-or-later or Apache-2.0; **we use it under Apache-2.0**. It brings SPAKE2 (`com.github.MuntashirAkon.spake2-java:spake2-android` 2.2.1, LGPL-3.0, a small JNI library linked dynamically) and BouncyCastle 1.81 (MIT); the phone adds Conscrypt 2.7.0 (`org.conscrypt:conscrypt-android`, Apache-2.0), which pairing needs for TLS 1.3's keying-material export, and BouncyCastle's `bcpkix` for the ADB key's certificate. JitPack is a repository for exactly these two groups (`exclusiveContent` in `settings.gradle.kts`); everything else comes from Google and Maven Central.
+
+The phone APK is about 12 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, Conscrypt's for about 2.7 MB, and the APK carries only arm64 code. The wear APK is about 15 MB: it embeds Cronet too (for calls without the phone), for arm64 and 32-bit ARM, which is 11 MB of it.
 
 ## Building
 
@@ -138,7 +140,7 @@ To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) rem
 ### How it talks to Life OS
 
 - `core/…/api/LifeOsClient.kt` over `CronetTransport`: the embedded Cronet with the built-in DNS resolver (ECH), no QUIC, redirects never followed.
-- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.3.1 (4)`.
+- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.4.0 (6)`.
 - Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads, voice uploads with an `Idempotency-Key`) are retried twice on errors that may pass.
 - The token is encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
 - For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the phone's token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a token or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
@@ -161,6 +163,15 @@ Voice, Photo and Text go into a queue (`core/…/capture`) that a WorkManager jo
 
 The app reads `/android/updates` (the contract is `docs/operations/android-releases.md` in the life-os repository) when it starts (at most every 6 hours; it only shows a banner), once a day on an unmetered network (`UpdateWorker`: downloads, and installs at once when the app is not on screen), and on **Settings → Check for updates** (downloads and installs). It takes `apps.phone` only when its `versionCode` is higher than its own and the phone's API level reaches `minSdk`; it downloads through the authenticated client (resuming a partial file), refuses a file whose size or SHA-256 differs, checks that the archive is this package at that version, and installs it with a `PackageInstaller` session and `USER_ACTION_NOT_REQUIRED`. Android asks once, on the first self-update after a browser install (your browser is then the installer of record): the app opens the confirmation, or offers it on Home. Once Life OS installed the current version, later updates are silent. Without **Install unknown apps** for Life OS it leads to that setting. After a restart on a new version, Home says "Updated to x.y".
 
+### The watch app: setup and updates (P19-06, 0.4.0)
+
+**Settings › Watch** shows the watch app's version, the last update's result, **Update now**, the watch's ABIs, and **Set up the watch app**:
+
+- **Set up the watch app** installs the watch app once, without Play and without a computer: the phone downloads and checks the newest `apps.wear`, pairs with the watch's Wireless debugging (the code and IP:port the watch shows), finds the connection port over mDNS or asks for it, installs the APK, allows "Install unknown apps" for Life OS on the watch (`appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow`), and checks that the watch app answers over the Data Layer. Then Wireless debugging goes off again. The phone's ADB key stays, encrypted with a Keystore key, for a later rescue without a new pairing.
+- **Updates**: the phone asks the watch its version over the Data Layer; when Life OS publishes a newer `apps.wear`, it downloads and checks it (size, SHA-256, package, version, the release key), offers it, and streams it through a channel. The watch checks it again and installs it itself, silently (`USER_ACTION_NOT_REQUIRED`), and reports the result on its next start. Daily on Wi-Fi, when the app opens (at most every 6 hours), when the watch reports in, and on Update now; with backoff, a battery rule and Android's 30 seconds between installs.
+
+The steps, the protocol and the failure modes are in [docs/wear.md](docs/wear.md#install-and-updates).
+
 ### Share, push, widgets (0.3.0)
 
 - **Share → Life OS** (`phone/…/share/ShareActivity.kt`, mapping in `core/…/share/ShareMapper.kt`): `ACTION_SEND` with text or an image and `ACTION_SEND_MULTIPLE` with images, from any app. A sheet shows the text or link ("Instagram link", "TikTok link", "YouTube link") and the images, takes an optional note, and queues a text capture, or a photo capture with up to five images (converted to JPEG while the share's read permission lasts). Links stay text with their URL, so Life OS's recipe import and processor handle them.
@@ -172,4 +183,4 @@ The app reads `/android/updates` (the contract is `docs/operations/android-relea
 
 The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes.
 
-Until installs through the phone exist (P19-06), the wear APK goes onto the watch with `adb` over Wi-Fi debugging: `adb install lifeos-wear-….apk`. The watch's setup (token, tiles, complication, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
+The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complication, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
