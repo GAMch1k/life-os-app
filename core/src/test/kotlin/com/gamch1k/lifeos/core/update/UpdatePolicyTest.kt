@@ -67,6 +67,25 @@ class UpdatePolicyTest {
     }
 
     @Test
+    fun `the wear entry is decided against the watch's version and API level`() {
+        val wear = release(5, minSdk = 33, url = "/android/lifeos-wear-0.4.0-5.apk")
+        val manifest = UpdateManifest(1, apps = UpdateApps(phone = release(5), wear = wear))
+        assertEquals(UpdateDecision.Available(wear), UpdatePolicy.decide(ReleaseApp.WEAR, manifest, installedVersionCode = 4, sdkInt = 36))
+        assertTrue(UpdatePolicy.decide(ReleaseApp.WEAR, manifest, 5, 36) is UpdateDecision.UpToDate)
+        assertTrue("a downgrade is never offered", UpdatePolicy.decide(ReleaseApp.WEAR, manifest, 6, 36) is UpdateDecision.UpToDate)
+        assertTrue(UpdatePolicy.decide(ReleaseApp.WEAR, manifest, 4, 32) is UpdateDecision.NeedsNewerAndroid)
+        assertEquals(UpdateDecision.UpToDate(null), UpdatePolicy.decide(ReleaseApp.WEAR, manifest(release(5)), 4, 36))
+    }
+
+    @Test
+    fun `each app takes only its own APK`() {
+        val phoneApkAsWear = UpdateManifest(1, apps = UpdateApps(wear = release(5, url = "/android/lifeos-phone-0.4.0-5.apk")))
+        assertTrue(UpdatePolicy.decide(ReleaseApp.WEAR, phoneApkAsWear, 4, 36) is UpdateDecision.Invalid)
+        assertEquals(null, UpdatePolicy.validate(ReleaseApp.WEAR, release(5, url = "/android/lifeos-wear-0.4.0-5.apk")))
+        assertEquals("the URL is not a wear APK under /android/", UpdatePolicy.validate(ReleaseApp.WEAR, release(5)))
+    }
+
+    @Test
     fun `automatic checks are throttled`() {
         val now = Instant.parse("2026-10-12T12:00:00Z")
         val sixHours = Duration.ofHours(6)
