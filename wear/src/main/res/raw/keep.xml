@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Play services reads android_wear_capabilities by name, which resource
+<!-- Kept in case resource shrinking is switched on again (it is off: see build.gradle.kts). Play services reads android_wear_capabilities by name, which resource
      shrinking can't see: without this file it removed the array (0.4.0), and
      the phone and the watch couldn't find each other. tools/build checks it. -->
 <resources xmlns:tools="http://schemas.android.com/tools"

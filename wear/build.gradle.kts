@@ -25,7 +25,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
-            isShrinkResources = true
+            // Off: the shrinker removed array/android_wear_capabilities, which Play
+            // services reads by name, even with res/raw/keep.xml (0.4.0, 0.4.1
+            // builds); the APK is mostly native code, so it saves little.
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
