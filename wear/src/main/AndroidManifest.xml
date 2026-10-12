@@ -24,6 +24,12 @@
             android:name="com.google.android.wearable.standalone"
             android:value="false" />
 
+        <!-- The phone app's notifications (reminders with Done and Snooze) are shown on the watch by
+             bridging; this app posts none of its own for them, so bridging stays on (docs/wear.md). -->
+        <meta-data
+            android:name="com.google.android.wearable.notificationBridgeMode"
+            android:value="BRIDGING" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
