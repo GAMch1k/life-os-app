@@ -18,9 +18,9 @@ import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * The watch app: Home (record, recent captures, Connection), the recording
- * screen, and Connection. The Capture tile, the Capture launcher entry and
- * the recording notice open it with a [Launch].
+ * The watch app: Home (record, recent captures, Today, Connection), the
+ * recording screen, Today, and Connection. Tiles, the complication, the
+ * Capture launcher entry and the recording notice open it with a [Launch].
  */
 class MainActivity : ComponentActivity() {
     private val viewModel: WearViewModel by viewModels()
@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
 private object Routes {
     const val HOME = "home"
     const val RECORD = "record"
+    const val TODAY = "today"
     const val CONNECTION = "connection"
 }
 
@@ -77,7 +78,11 @@ private fun WearApp(viewModel: WearViewModel, launch: Pair<Launch, Long>?, onLau
                         viewModel.finishAfterRecording = true
                         navController.navigate(Routes.RECORD) { launchSingleTop = true }
                     }
-                    Launch.Today, is Launch.CompleteTask -> Unit
+                    Launch.Today -> navController.navigate(Routes.TODAY) { launchSingleTop = true }
+                    is Launch.CompleteTask -> {
+                        viewModel.askToComplete(request.taskId, request.title)
+                        navController.navigate(Routes.TODAY) { launchSingleTop = true }
+                    }
                 }
                 onLaunchHandled()
             }
@@ -90,6 +95,7 @@ private fun WearApp(viewModel: WearViewModel, launch: Pair<Launch, Long>?, onLau
                             viewModel.finishAfterRecording = false
                             navController.navigate(Routes.RECORD) { launchSingleTop = true }
                         },
+                        onToday = { navController.navigate(Routes.TODAY) },
                         onConnection = { navController.navigate(Routes.CONNECTION) },
                     )
                 }
@@ -106,6 +112,7 @@ private fun WearApp(viewModel: WearViewModel, launch: Pair<Launch, Long>?, onLau
                         },
                     )
                 }
+                composable(Routes.TODAY) { TodayScreen(viewModel) }
                 composable(Routes.CONNECTION) { ConnectionScreen(viewModel) }
             }
         }

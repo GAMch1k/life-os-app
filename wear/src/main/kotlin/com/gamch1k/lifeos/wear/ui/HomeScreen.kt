@@ -27,14 +27,15 @@ import androidx.wear.compose.material3.Text
 import com.gamch1k.lifeos.wear.R
 import com.gamch1k.lifeos.wear.capture.Capture
 import com.gamch1k.lifeos.wear.capture.CaptureState
+import com.gamch1k.lifeos.wear.today.TodayLayout
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
-/** Home: the big Record button, the recent captures with their state, and Connection. */
+/** Home: the big Record button, the recent captures with their state, Today and Connection. */
 @Composable
-fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onConnection: () -> Unit) {
+fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onToday: () -> Unit, onConnection: () -> Unit) {
     val captures by viewModel.captures.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val use24Hour = DateFormat.is24HourFormat(context)
@@ -58,6 +59,28 @@ fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onConnection: () 
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            item {
+                val now = Instant.now()
+                val zone = ZoneId.systemDefault()
+                val summary = today?.let { snapshot ->
+                    val next = TodayLayout.upcomingEvents(snapshot, now, zone, use24Hour).firstOrNull()
+                    val tasks = TodayLayout.tasks(snapshot, now, zone, use24Hour).size
+                    listOfNotNull(next?.label, if (tasks > 0) "$tasks ${context.getString(R.string.tasks).lowercase()}" else null)
+                        .joinToString(" · ")
+                        .ifEmpty { context.getString(R.string.nothing_today) }
+                }
+                FilledTonalButton(
+                    onClick = onToday,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = { Icon(painterResource(R.drawable.ic_event), contentDescription = null) },
+                    label = { Text(stringResource(R.string.today)) },
+                    secondaryLabel = if (summary != null) {
+                        { Text(summary, maxLines = 2) }
+                    } else {
+                        null
+                    },
+                )
             }
             if (captures.isNotEmpty()) {
                 item { ListHeader { Text(stringResource(R.string.recent)) } }
@@ -85,8 +108,7 @@ fun HomeScreen(viewModel: WearViewModel, onRecord: () -> Unit, onConnection: () 
 /** One capture: its time and length, its state; tap retries a failed or waiting one, long-press deletes. */
 @Composable
 private fun CaptureButton(capture: Capture, use24Hour: Boolean, onRetry: () -> Unit, onDelete: () -> Unit) {
-    val time = DateTimeFormatter.ofPattern(if (use24Hour) "HH:mm" else "h:mm a")
-        .format(Instant.ofEpochMilli(capture.createdAt).atZone(ZoneId.systemDefault()))
+    val time = TodayLayout.clock(Instant.ofEpochMilli(capture.createdAt), ZoneId.systemDefault(), use24Hour)
     val seconds = capture.durationMillis / 1000
     val retryable = capture.state == CaptureState.FAILED || capture.state == CaptureState.WAITING
     Button(

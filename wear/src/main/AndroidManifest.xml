@@ -81,7 +81,37 @@
                 android:resource="@drawable/tile_preview_capture" />
         </service>
 
+        <service
+            android:name=".tile.TodayTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_event"
+            android:label="@string/today_tile"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/tile_preview_today" />
+        </service>
 
+        <service
+            android:name=".complication.NextEventComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_event"
+            android:label="@string/next_event_complication"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT,MONOCHROMATIC_IMAGE" />
+            <!-- Pushed after every refresh; this is only the safety net. -->
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="1800" />
+        </service>
 
     </application>
 
