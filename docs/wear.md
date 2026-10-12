@@ -2,8 +2,8 @@
 
 The watch app for the owner's Galaxy Watch 8 (One UI 8 Watch, Wear OS 6). First version:
 
-- **voice capture**: tap a tile, the complication, the app, or double-press the Home key; speak; tap Send. The recording goes to Life OS Voice and comes back as an Inbox item;
-- **a "Today" tile and a next-event complication**;
+- **voice capture**: tap a tile, a complication, the app, or double-press the Home key; speak; tap Send. The recording goes to Life OS Voice and comes back as an Inbox item;
+- **a "Today" tile, and two complications**: "Life OS next" (the next event or task) and "Life OS capture" (a microphone) ([Tiles and complications](#tiles-and-complications));
 - **notifications with Done and Snooze**, bridged from the phone app (P18-05). The watch app adds nothing of its own there;
 - **install and updates through the phone** (P19-06): no Play Store, no computer, and ADB only once ([Install and updates](#install-and-updates)).
 
@@ -19,7 +19,7 @@ No AI runs on the watch: it records and uploads, Life OS does the rest.
 | `wear/…/link/` | The watch's end of the Data Layer, and the token store. |
 | `wear/…/capture/` | Recording and the upload queue. |
 | `wear/…/today/` | Today's events and tasks: fetch, cache, layout rules. |
-| `wear/…/tile/`, `wear/…/complication/` | The Capture and Today tiles, the next-event complication. |
+| `wear/…/tile/`, `wear/…/complication/` | The Capture and Today tiles; the "Life OS next" and "Life OS capture" complications. |
 | `wear/…/ui/` | The app's screens (Compose for Wear OS Material 3). |
 | `wear/…/update/` | The watch's end of updates through the phone: version answer, offer, transfer, checks, install, result. |
 | `core/…/update/WatchUpdateRules.kt`, `ApkRules.kt` | When the phone pushes, what the watch accepts, and the APK checks both sides run. |
@@ -129,13 +129,40 @@ Long-press a capture on Home to delete it.
 - **Cache**: `files/today.json`, so the tile and complication always have something to show.
 - **Refresh**: WorkManager every 30 minutes (10 minutes flex, batched with other wake-ups), when the tile shows data older than 10 minutes or the complication older than 30, when the app opens with data older than 5 minutes, after a task is completed, and when the phone pings `/lifeos/today-changed`.
 - **Rules** (`TodayLayout`, `TodayRules`): events still ahead first (`now`, `14:30`, `All day`, `Tue 09:00`), then tasks, overdue first. A task is date-only by the Tasks service's rule (owner-local midnight, or a UTC midnight on the same calendar day), and overdue from the day after. Three rows on the 44 mm screen and two on smaller ones; a list gives its unused rows to the other; `+N more` when some don't fit; `As of 08:30` when the data is older than two hours.
-- **The Today tile** has one timeline entry per event start and end in the next 12 hours, so a past event leaves the tile without a refresh. Tapping a task opens the app's **Mark done?** confirmation; tapping an event opens Today; the edge button records.
-- **The next-event complication** answers with a timeline from the cache, so the watch face moves to the following event at each start:
-  - short text: the time, with the event's title as title (a microphone and "Free" when nothing is ahead);
-  - long text: `14:30 Dentist` under "Next" or "Tomorrow";
-  - monochromatic image: a microphone.
-  
-  Every type records when tapped.
+- **The Today tile** and **"Life OS next"** read only the cache, never the network ([Tiles and complications](#tiles-and-complications)).
+
+## Tiles and complications
+
+### The Today tile
+
+- **Content**: the rows of the rules above. Tapping a task opens the app's **Mark done?** confirmation; tapping an event opens Today with that event outlined; the edge button records. With nothing cached: "Open Life OS to load Today" (and the last refresh's problem under it); with an empty day: "Nothing left today".
+- **Fast**: the tile is built from `files/today.json` at once. Data older than 10 minutes starts a refresh in the background (WorkManager); when it is done, the tile and the complication are asked to redraw (`WearGraph.updateSurfaces`).
+- **Timeline** (`TodayTilePlan`): one entry per stretch between the event starts and ends of the next 12 hours, each with a start and an end, the first reaching back to the epoch; then a **default entry without validity**, with the state after the last change. So the renderer always has an entry for "now", and a past event leaves the tile without a refresh. The tile is asked for again every 30 minutes while in use.
+- **Never black, never throws**: any failure while building gives a single-entry tile, "Today couldn't be shown. Tap to open Life OS.", asked for again after 5 minutes; if Material 3 fails there too, plain text. Renderers older than schema 1.200 (or not reporting one) get a plain-text layout without images; Material 3 adapts itself above that.
+- **Why 0.4.1 was black**: its last timeline entry (the only one when no event started or ended in the next 12 hours: no cache yet, an empty day, a day of tasks only, the evening) had a start and no end. On the wire an unset end is 0, so the entry is never valid, and the renderer's "closest entry" fallback skips invalid intervals too: nothing to show, a black tile. With events ahead it rendered until the last event start or end in its 12-hour window, then went black until the next request. The Capture tile has a single entry without validity, so it always worked.
+
+### "Life OS next" (complication)
+
+`NextEventComplicationService` (the 0.4 class name, so watch faces that use it keep it), rules in `NextUp`:
+
+- **What**: the next timed event that hasn't started (today or tomorrow), with a calendar icon; else the first task due (overdue first, then by due time), showing its due time, "Today" or "Overdue", with a check icon; else a microphone ("Free").
+
+| Type | Event | Task | Nothing ahead |
+|---|---|---|---|
+| `RANGED_VALUE` | arc 0–60, text `14:30`, title `Dentist` | full arc, text `Today`/`15:00`/`Overdue`, title | empty arc, microphone |
+| `GOAL_PROGRESS` | as ranged value, target 60 | as ranged value | as ranged value |
+| `SHORT_TEXT` | `14:30`, title `Dentist` (`Tue Flight` tomorrow) | `Today`, title `Pay rent` | `Free`, microphone |
+| `LONG_TEXT` | `14:30 Dentist` under "Next" or "Tomorrow" | `Pay rent` under `Today` | `Nothing ahead`, microphone |
+| `MONOCHROMATIC_IMAGE`, `SMALL_IMAGE` | calendar | check | microphone |
+
+- **Text**: titles are cut to 10 characters in the small slots and 40 in the long one; the content description has the whole title and time ("Next: Dentist at 14:30", "Pay rent, overdue"). Where a slot takes several types, the app prefers ranged value, long text, short text, goal progress, then the images.
+- **The arc** (ranged value, goal progress), in minutes of a 60-minute window: for an event it fills in 5-minute steps over the hour before it starts (0 until then, 60 in its last 5 minutes). A task is due already, so its arc is full; nothing ahead is empty. "Tasks done today out of due today" would be nicer, but the watch fetches only the open tasks, so that count isn't available.
+- **Tap**: an event or a task opens Today with it outlined and scrolled to; the microphone records.
+- **Timeline**: from the cache, one entry per event (at most four) until it starts, plus the twelve 5-minute steps of the last hour for the value types; then the default, the state after the last of them. The watch face switches by itself, without waking the app. Every Today refresh asks for an update; the system asks every 30 minutes as a safety net.
+
+### "Life OS capture" (complication)
+
+`CaptureComplicationService`: a microphone that starts a recording, as monochromatic or small image, or short text ("Rec" under the microphone). Added because "Life OS next" now shows a calendar or a check in image slots too (0.4 always showed a microphone there): put "Life OS next" on an edge slot and "Life OS capture" on a small one to have both. It never changes, so the system never asks again.
 
 ## Notifications (P19-04)
 
@@ -245,8 +272,8 @@ The wear APK carries embedded Cronet for `arm64-v8a` and `armeabi-v7a` (11 MB of
 2. **Token**: the phone app must hold its service token, entered at its first run or under Settings → **Change token**; the watch needs none of its own. Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
 3. **Microphone**: the first recording asks for it. After "Don't allow", the recording screen offers **Open settings**.
 4. **Home key**: Settings › Advanced features › Customize buttons (Customize keys on older One UI Watch versions) › Home key › Double press › choose **Capture**. "Capture" is the app's second entry in the app list and opens straight into recording; choosing "Life OS" opens Home instead.
-5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same.
-6. **Complication**: touch and hold the watch face › Customize › Complications, pick a slot, then **Life OS next event**. Short-text slots show the time and title, long ones `14:30 Dentist`, small round ones a microphone. Some Samsung watch faces offer no slots for other apps.
+5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same. After an update a tile may keep its old look until it is shown again; if Today stays empty, swipe away and back.
+6. **Complications** (Galaxy Watch): touch and hold the watch face › **Customize** › swipe to **Complications** › tap the slot (an edge slot for the next event) › **Life OS next**; for a capture button, another slot › **Life OS capture**. Press the Home key to save. The Galaxy Wearable app on the phone (Watch faces › Customize) does the same. Edge slots show the arc and the time, round ones the time and title or an icon, long ones `14:30 Dentist` ([Tiles and complications](#tiles-and-complications)). Faces that used "Life OS next event" from 0.4 keep the slot, now named "Life OS next". Some Samsung watch faces offer no slots for other apps.
 7. The watch's ABIs: the setup reads them; Settings › Watch shows them and which single ABI a smaller watch APK would need ([The watch's ABIs](#the-watchs-abis)). The APK carries both until the owner decides.
 
 ## Tests and build
@@ -256,7 +283,8 @@ The wear APK carries embedded Cronet for `arm64-v8a` and `armeabi-v7a` (11 MB of
   - `core/…/capture/`: the phone's queue, including Retry: a new job attempt after a failed Voice job or a 409, the same key otherwise;
   - `wear/…/net/`: the watch's relay against the phone's real handler, end to end, and the routing rules;
   - `wear/…/capture/`: the queue's state machine and idempotency (job attempts, their keys and metadata, Retry), and the uploader against a fake Life OS (the multipart body, polling to In Inbox, waiting, backoff, refusals, a refused token, a restart, Retry after a failed job, a 409 or a lost reply);
-  - `wear/…/today/`: parsing, the date-only rule, the tile's rows, the timeline change times, the complication's timeline, and the repository's queries and cache;
+  - `wear/…/today/`: parsing, the date-only rule, the tile's rows, the timeline change times, the repository's queries and cache; the Today tile's plan from no cache, an empty day, a day whose events are over, yesterday's data and a full day (one default entry, closed timed entries, something shown at every minute for 36 hours, and the content the rules give for each minute), and 0.4.1's open-ended entry that was never shown; "Life OS next": what comes next (event, task, nothing), every type's fields for each, the arc's 5-minute steps, the timeline switching at each start and step, and the cap at four events;
+  - `wear/…/tile/`: the real ProtoLayout timeline of the Today tile, read back with the tile renderer's rule;
   - `core/…/update/`: the wear entry of the manifest, the phone's push rules (version, battery, the wait for a report, backoff, Update now, a waiting confirmation), the watch's offer rules (newer only, permission, battery, space, busy, 30 seconds), the APK checks (package, certificate, announced version, downgrade), and the ABI advice;
   - `core/…/wearlink/WatchUpdateProtocolTest`: the update messages (round trips, wire names, a 0.3 watch's answer, unknown codes, versions), and the transfer (chunks, progress, SHA-256, too many and too few bytes, the sender's abort, a stream cut mid-chunk, the header's limits);
   - `core/…/watchsetup/`: the bootstrap's state machine with ADB faked (the whole run, a failed download, typos, no Wi-Fi, wrong code, an expired pairing, the wrong network, no mDNS, a changed port, a lost pairing, a rescue without pairing, a refused install and Try again, a newer version on the watch, a refused permission, optional steps, a broken connection, a watch app that answers late), and the parsing of addresses, codes, the subnet and the shell's answers.

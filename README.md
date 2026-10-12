@@ -10,7 +10,7 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 |---|---|
 | `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules (the phone's and the watch's), the phone–watch link, the watch setup's state machine, and the network check. Most unit tests live here; the wear app's are in `wear/src/test`. |
 | `phone/` | The phone app ([below](#the-phone-app)): onboarding, Today, capture with an offline queue, self-update, the watch app's setup and updates, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
-| `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the next-event complication, updates through the phone ([docs/wear.md](docs/wear.md)). |
+| `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the "Life OS next" and "Life OS capture" complications, updates through the phone ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
 | `version.properties` | The one version of both apps. |
@@ -183,4 +183,4 @@ The steps, the protocol and the failure modes are in [docs/wear.md](docs/wear.md
 
 The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes.
 
-The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complication, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
+The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complications, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
