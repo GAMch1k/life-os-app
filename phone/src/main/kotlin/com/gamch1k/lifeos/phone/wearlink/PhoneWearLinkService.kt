@@ -60,9 +60,10 @@ class PhoneWearLinkService : WearableListenerService() {
                 val input = channels.getInputStream(channel).await()
                 val output = channels.getOutputStream(channel).await()
                 handler.handleRelayChannel(input, output)
+                // Ends our side after the reply; the watch closes the channel once it has read it.
+                output.close()
             } catch (_: Exception) {
                 // The watch sees the channel close and treats the phone as unreachable.
-            } finally {
                 channels.close(channel)
             }
         }
