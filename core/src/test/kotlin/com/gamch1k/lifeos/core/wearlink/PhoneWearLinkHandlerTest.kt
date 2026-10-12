@@ -3,6 +3,7 @@ package com.gamch1k.lifeos.core.wearlink
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -154,6 +155,48 @@ class PhoneWearLinkHandlerTest {
         assertEquals("try-2", retry.header.id)
         assertEquals("""{"id":"job-2"}""", other.body.toString(Charsets.UTF_8))
         assertEquals(2, relay.calls.size)
+    }
+
+    @Test
+    fun `a new job attempt's key is not answered with the failed attempt's job`() = runTest {
+        var jobs = 0
+        val relay = RecordingRelay { jobs++; ok("""{"id":"job-$jobs"}""", 202) }
+        val handler = handler(relay)
+        fun upload(key: String) = relayMessage("POST", "/api/voice/v1/audio-jobs", mapOf("Idempotency-Key" to key, "Content-Type" to "audio/ogg"), "a".toByteArray())
+
+        handler.handleRelayMessage(upload("capture-1"))
+        val newAttempt = RelayCodec.decodeResponse(handler.handleRelayMessage(upload("capture-1-r1")))
+        val itsRetry = RelayCodec.decodeResponse(handler.handleRelayMessage(upload("capture-1-r1")))
+        assertEquals("""{"id":"job-2"}""", newAttempt.body.toString(Charsets.UTF_8))
+        assertEquals("""{"id":"job-2"}""", itsRetry.body.toString(Charsets.UTF_8))
+        assertEquals(2, relay.calls.size)
+    }
+
+    @Test
+    fun `only a success is replayed, a write that got 5xx, 429 or a refused token runs again`() = runTest {
+        val answers = ArrayDeque(listOf(503, 429, 401, 202, 202))
+        val relay = RecordingRelay { val status = answers.removeFirst(); ok("""{"status":$status}""", status) }
+        val handler = handler(relay)
+        val upload = relayMessage("POST", "/api/voice/v1/audio-jobs", mapOf("Idempotency-Key" to "capture-1", "Content-Type" to "audio/ogg"), "a".toByteArray())
+        val statuses = List(5) { RelayCodec.decodeResponse(handler.handleRelayMessage(upload)).header.status }
+        assertEquals(listOf(503, 429, 401, 202, 202), statuses)
+        assertEquals("the success is replayed, not run again", 4, relay.calls.size)
+    }
+
+    @Test
+    fun `retries waiting on a write that failed get its answer, later ones run again`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val cache = RelayReplayCache()
+        var runs = 0
+        val first = async { cache.getOrExecute("k") { runs++; gate.await(); ok("busy", 503) } }
+        yield() // the first try is running
+        val waiting = async { cache.getOrExecute("k") { runs++; ok("never") } }
+        yield() // the retry waits for it
+        gate.complete(Unit)
+        assertEquals(503, first.await().status)
+        assertEquals(503, waiting.await().status)
+        assertEquals(200, cache.getOrExecute("k") { runs++; ok("later") }.status)
+        assertEquals(2, runs)
     }
 
     @Test

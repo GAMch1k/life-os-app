@@ -6,19 +6,23 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Makes relayed writes idempotent between the watch and the phone.
+ * Answers a relayed write's retry from the phone, without running it again.
  *
- * The watch sends every write with an `Idempotency-Key` (a voice capture's
- * id, for example) and repeats it unchanged when it retries. If the phone ran
- * the write but the reply to the watch got lost (the watch walked out of
- * Bluetooth range), the retry gets the stored reply instead of creating a
- * second Voice job. A request with the same key that is still running is
- * awaited, not run twice. Failures are not kept, so a retry after
- * "unreachable" really runs again.
+ * The watch sends every write with an `Idempotency-Key` (a voice upload's
+ * job attempt, `<capture id>` or `<capture id>-r<n>`; a task completion's
+ * tap) and repeats it unchanged when it retries. If the phone ran the write
+ * but the reply to the watch got lost (the watch walked out of Bluetooth
+ * range), the retry gets the stored reply, and the audio need not travel to
+ * Voice again. A request with the same key that is still running is awaited,
+ * not run twice.
+ *
+ * Only successes (2xx) are kept. A retry after "unreachable", a 5xx, a 429 or
+ * a refused token runs again, so a capture Voice never accepted really gets
+ * another try; a write that Life OS refused is simply refused again.
  *
  * In memory only: it covers the seconds to minutes of a retry, not a phone
- * restart. Life OS's own `Idempotency-Key` support (Tasks has it, Voice not
- * yet) covers the rest.
+ * restart. Life OS's own `Idempotency-Key` support (Voice since BUG-40, and
+ * Tasks) makes the write idempotent beyond that.
  */
 class RelayReplayCache(
     private val ttlMillis: Long = 15 * 60_000L,
@@ -41,6 +45,10 @@ class RelayReplayCache(
         if (!owner) return entry.result.await()
         try {
             val response = block()
+            if (HttpOutcome.of(response.status) != HttpOutcome.SUCCESS) {
+                // Waiting retries get this answer; later ones run again.
+                mutex.withLock { if (entries[key] === entry) entries.remove(key) }
+            }
             entry.result.complete(response)
             return response
         } catch (e: Throwable) {

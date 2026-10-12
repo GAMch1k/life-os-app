@@ -63,7 +63,7 @@ class PhoneWearLinkHandler(
         val reply = execute(frame.header, frame.body)
         val encoded = RelayCodec.encodeResponse(reply.header, reply.body)
         if (encoded.size > WearLink.MAX_MESSAGE_BYTES) {
-            // The write (if it was one) is in the replay cache: the watch's retry through a channel replays it.
+            // A write that succeeded is in the replay cache: the watch's retry through a channel replays it.
             return RelayCodec.encodeResponse(
                 RelayResponse(id = frame.header.id, error = RelayError(RelayErrorCode.TOO_LARGE, "reply of ${encoded.size} bytes")),
             )
