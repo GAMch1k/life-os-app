@@ -86,15 +86,19 @@ class WearGraph(private val app: Context) {
         return result
     }
 
-    /** Redraws the Today tile and the next-event complication from the cache. */
+    /** Redraws the Today tile and the "Life OS next" complication from the cache; each on its own, so one failing doesn't stop the other. */
     fun updateSurfaces() {
         try {
             TileService.getUpdater(app).requestUpdate(TodayTileService::class.java)
+        } catch (_: Exception) {
+            // No tile in use: nothing to redraw.
+        }
+        try {
             ComplicationDataSourceUpdateRequester
                 .create(app, ComponentName(app, NextEventComplicationService::class.java))
                 .requestUpdateAll()
         } catch (_: Exception) {
-            // No tile or complication in use: nothing to redraw.
+            // No complication in use: nothing to redraw.
         }
     }
 }

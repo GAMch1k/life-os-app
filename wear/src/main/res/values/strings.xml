@@ -5,9 +5,13 @@
     <string name="capture_launcher">Capture</string>
     <string name="capture_tile">Life OS Capture</string>
     <string name="today_tile">Life OS Today</string>
-    <string name="next_event_complication">Life OS next event</string>
+    <!-- The complications: the next event or task (resource name kept from 0.4), and a microphone. -->
+    <string name="next_event_complication">Life OS next</string>
+    <string name="capture_complication">Life OS capture</string>
 
     <string name="record">Record</string>
+    <!-- The capture complication's short text, under the microphone. -->
+    <string name="record_short">Rec</string>
     <string name="open">Open</string>
     <string name="record_voice_note">Record a voice note</string>
     <string name="recording">Recording</string>
@@ -35,17 +39,12 @@
     <string name="recent">Recent</string>
 
     <string name="today">Today</string>
-    <string name="tomorrow">Tomorrow</string>
     <string name="tasks">Tasks</string>
     <string name="events">Events</string>
-    <string name="next_event">Next</string>
-    <string name="no_more_events">No more events</string>
-    <string name="no_events_short">Free</string>
     <string name="nothing_today">Nothing left today</string>
     <string name="refresh">Refresh</string>
     <string name="updated_at">Updated %1$s</string>
     <string name="task_due">%1$s, due %2$s</string>
-    <string name="next_event_description">Next: %1$s at %2$s</string>
     <string name="mark_done">Mark done?</string>
     <string name="marked_done">Done</string>
     <string name="could_not_complete">Not done</string>

@@ -129,6 +129,9 @@
                 android:resource="@drawable/tile_preview_today" />
         </service>
 
+        <!-- "Life OS next": the next event or task (docs/wear.md). The class name stays from 0.4 so
+             watch faces that use it keep it. Samsung faces' edge slots take RANGED_VALUE, SHORT_TEXT
+             or an image, some GOAL_PROGRESS; the order is this app's preference where a slot takes several. -->
         <service
             android:name=".complication.NextEventComplicationService"
             android:exported="true"
@@ -140,11 +143,29 @@
             </intent-filter>
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="SHORT_TEXT,LONG_TEXT,MONOCHROMATIC_IMAGE" />
+                android:value="RANGED_VALUE,LONG_TEXT,SHORT_TEXT,GOAL_PROGRESS,MONOCHROMATIC_IMAGE,SMALL_IMAGE" />
             <!-- Pushed after every refresh; this is only the safety net. -->
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="1800" />
+        </service>
+
+        <!-- "Life OS capture": a microphone that records. Static, so no update period. -->
+        <service
+            android:name=".complication.CaptureComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_mic"
+            android:label="@string/capture_complication"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="MONOCHROMATIC_IMAGE,SMALL_IMAGE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
         </service>
 
     </application>

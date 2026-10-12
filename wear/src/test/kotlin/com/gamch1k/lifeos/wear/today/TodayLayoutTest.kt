@@ -159,28 +159,4 @@ class TodayLayoutTest {
         assertEquals("now Dentist", TodayLayout.model(day, Instant.parse("2026-10-12T12:30:00Z"), berlin, 3).rows.first().label)
         assertEquals("now Walk", TodayLayout.model(day, Instant.parse("2026-10-12T13:30:00Z"), berlin, 3).rows.first().label)
     }
-
-    @Test
-    fun `the complication shows each next event until it starts`() {
-        val day = snapshot(
-            events = listOf(
-                timed("e2", "Dinner", "2026-10-12T17:00:00Z", "2026-10-12T19:00:00Z"),
-                timed("e1", "Dentist", "2026-10-12T12:30:00Z", "2026-10-12T13:30:00Z"),
-                timed("same", "Call", "2026-10-12T17:00:00Z", "2026-10-12T17:30:00Z"),
-                timed("now", "Workshop", "2026-10-12T07:30:00Z", "2026-10-12T09:00:00Z"),
-                EventDto(id = "a", title = "Birthday", allDay = true, startDate = "2026-10-12", endDate = "2026-10-12"),
-                timed("tmrw", "Flight", "2026-10-13T06:00:00Z", "2026-10-13T08:00:00Z"),
-            ),
-        )
-        val timeline = NextEvent.timeline(day, now, berlin)
-        assertEquals(listOf("Dentist", "Dinner", "Flight"), timeline.map { it.title })
-        assertEquals(now, timeline[0].validFrom)
-        assertEquals(Instant.parse("2026-10-12T12:30:00Z"), timeline[0].validUntil)
-        assertEquals(timeline[0].validUntil, timeline[1].validFrom)
-        assertEquals("14:30", timeline[0].time)
-        assertEquals("Tue 08:00", timeline[2].time)
-        assertEquals("08:00", timeline[2].shortTime)
-        assertTrue(timeline[2].tomorrow)
-        assertTrue(NextEvent.timeline(null, now, berlin).isEmpty())
-    }
 }

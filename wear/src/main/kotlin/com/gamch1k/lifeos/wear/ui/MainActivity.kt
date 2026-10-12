@@ -55,6 +55,17 @@ class MainActivity : ComponentActivity() {
         fun recordIntent(context: Context): Intent = Intent(context, MainActivity::class.java)
             .putExtra(Launch.EXTRA_ACTION, Launch.RECORD)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        /**
+         * Opens Today with [highlight] marked (the complication). The
+         * identifier keeps one PendingIntent per item: extras alone don't
+         * tell PendingIntents apart.
+         */
+        fun todayIntent(context: Context, highlight: String?): Intent = Intent(context, MainActivity::class.java)
+            .putExtra(Launch.EXTRA_ACTION, Launch.TODAY)
+            .apply { if (highlight != null) putExtra(Launch.EXTRA_HIGHLIGHT, highlight) }
+            .setIdentifier("today:" + (highlight ?: ""))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 }
 
