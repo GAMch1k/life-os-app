@@ -1,6 +1,9 @@
 package com.gamch1k.lifeos.phone.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
@@ -12,6 +15,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.gamch1k.lifeos.phone.NetworkCheckScreen
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /** The app's screens. */
 sealed interface Screen {
@@ -76,11 +80,21 @@ private fun decode(saved: String): Screen? = when {
 }
 
 @Composable
-fun AppRoot(startSignedIn: Boolean) {
+fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = MutableStateFlow(null)) {
     val stack = rememberSaveable(saver = StackSaver) {
         mutableStateListOf<Screen>(if (startSignedIn) Screen.Home else Screen.Onboarding(firstRun = true))
     }
     val navigator = remember { Navigator(stack) }
+    // A widget's capture button: open its screen on top of Home (once signed in).
+    val launch by launches.collectAsState()
+    LaunchedEffect(launch) {
+        val screen = launch ?: return@LaunchedEffect
+        launches.value = null
+        if (stack.firstOrNull() !is Screen.Onboarding) {
+            navigator.reset(Screen.Home)
+            navigator.go(screen)
+        }
+    }
     NavDisplay(
         backStack = stack,
         onBack = navigator::back,

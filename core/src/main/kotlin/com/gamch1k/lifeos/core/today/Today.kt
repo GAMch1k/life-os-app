@@ -17,7 +17,10 @@ data class TodaySnapshot(
     val timeZone: String,
     val tasks: List<Task> = emptyList(),
     val events: List<CalendarEvent> = emptyList(),
-)
+) {
+    /** The same Tasks and events, whenever they were read: nothing to tell the watch or the widgets. */
+    fun sameDataAs(other: TodaySnapshot?): Boolean = other != null && tasks == other.tasks && events == other.events
+}
 
 data class TaskRow(val id: String, val title: String, val detail: String, val recurring: Boolean)
 

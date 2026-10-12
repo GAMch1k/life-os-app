@@ -7,14 +7,11 @@ import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.capture.Capture
 import com.gamch1k.lifeos.core.capture.CaptureStatus
 import com.gamch1k.lifeos.core.today.TodayBuilder
-import com.gamch1k.lifeos.core.today.TodaySnapshot
 import com.gamch1k.lifeos.core.today.TodayView
 import com.gamch1k.lifeos.phone.graph
 import com.gamch1k.lifeos.phone.update.UpdateState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,7 +44,7 @@ data class HomeMessage(val text: String, val undoTaskId: String? = null)
 /** P18-07: Home's Today (overdue and due-today Tasks, today's and tomorrow's events) with the capture buttons. */
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application.graph
-    private val snapshot = MutableStateFlow<TodaySnapshot?>(null)
+    private val snapshot = graph.today.snapshot
     private val hidden = MutableStateFlow<Set<String>>(emptySet())
     private val refreshing = MutableStateFlow(false)
     private val error = MutableStateFlow<LifeOsException?>(null)
@@ -82,7 +79,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            snapshot.value = graph.homeCache.load()
+            graph.today.load()
             refresh()
         }
         viewModelScope.launch { graph.updates.noteLaunch()?.let { messageChannel.send(HomeMessage(it)) } }
@@ -94,17 +91,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         refreshing.value = true
         viewModelScope.launch {
             try {
-                val now = Instant.now()
-                val zone = ZoneId.systemDefault()
-                val (from, to) = TodayBuilder.eventRange(now, zone)
-                val fresh = coroutineScope {
-                    val tasks = async { graph.client.openTasksDueBefore(TodayBuilder.endOfToday(now, zone)) }
-                    val events = async { graph.client.events(from, to, zone) }
-                    TodaySnapshot(fetchedAt = now.toString(), timeZone = zone.id, tasks = tasks.await().items, events = events.await())
-                }
-                snapshot.value = fresh
+                graph.today.refresh()
                 error.value = null
-                graph.homeCache.save(fresh)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: LifeOsException) {
@@ -122,11 +110,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 graph.client.completeTask(taskId)
                 messageChannel.send(HomeMessage("Done: $title", undoTaskId = taskId))
-                snapshot.value?.let { current ->
-                    val updated = current.copy(tasks = current.tasks.filterNot { it.id == taskId })
-                    snapshot.value = updated
-                    graph.homeCache.save(updated)
-                }
+                graph.today.taskCompleted(taskId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: LifeOsException) {
