@@ -7,6 +7,8 @@ import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.api.ProcessingAttempt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.io.IOException
@@ -79,11 +81,12 @@ class CaptureSender(
             }
             SendOutcome.Sent
         } catch (cancelled: CancellationException) {
-            store.update(id) { it.copy(status = CaptureStatus.PENDING) }
+            // WorkManager stopped the job (constraints, quota): back to the queue, not stuck in SENDING.
+            withContext(NonCancellable) { store.update(id) { if (it.status == CaptureStatus.SENDING) it.copy(status = CaptureStatus.PENDING) else it } }
             throw cancelled
         } catch (error: LifeOsException) {
             val giveUp = !error.retryable || start.attempts >= maxAttempts
-            store.update(id) {
+            save(id) {
                 it.copy(
                     status = if (giveUp) CaptureStatus.FAILED else CaptureStatus.PENDING,
                     error = error.message,
@@ -94,7 +97,7 @@ class CaptureSender(
         } catch (error: IOException) {
             // The recording or a photo cannot be read any more.
             val message = "The capture's file cannot be read: ${error.message}"
-            store.update(id) { it.copy(status = CaptureStatus.FAILED, error = message, authProblem = false) }
+            save(id) { it.copy(status = CaptureStatus.FAILED, error = message, authProblem = false) }
             SendOutcome.Failed(message)
         }
     }
@@ -106,7 +109,8 @@ class CaptureSender(
             if (!file.isFile) throw IOException("${file.name} is missing")
             val reference = api.uploadImage(file)
             references = references + reference
-            store.update(capture.id) { it.copy(mediaReferences = references) }
+            val stored = references
+            save(capture.id) { it.copy(mediaReferences = stored) }
         }
         return references
     }
@@ -122,7 +126,7 @@ class CaptureSender(
                 dedupeKey = capture.dedupeKey,
             ),
         )
-        store.update(capture.id) {
+        save(capture.id) {
             it.copy(status = CaptureStatus.SENT, error = null, authProblem = false, inboxItemId = item.id, inboxState = item.state, sentAt = clock().toString())
         }
     }
@@ -132,12 +136,20 @@ class CaptureSender(
             val file = capture.files.firstOrNull()?.let(::File)
             if (file == null || !file.isFile) throw IOException("the recording is missing")
             val job = api.createAudioJob(file, capture.sourceMetadata())
-            store.update(capture.id) {
+            save(capture.id) {
                 it.copy(status = CaptureStatus.SENT, error = null, authProblem = false, voiceJobId = job.id, voiceStatus = job.status, sentAt = clock().toString())
             }
         } else {
-            store.update(capture.id) { it.copy(status = CaptureStatus.SENT, error = null, authProblem = false) }
+            save(capture.id) { it.copy(status = CaptureStatus.SENT, error = null, authProblem = false) }
         }
+    }
+
+    /**
+     * Stores what a call returned even if the job is being cancelled: losing a
+     * Voice job id would upload the recording again.
+     */
+    private suspend fun save(id: String, transform: (Capture) -> Capture) {
+        withContext(NonCancellable) { store.update(id, transform) }
     }
 
     /** After a new token: the captures that failed on the old one go back to the queue. Returns their ids. */

@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -32,7 +33,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gamch1k.lifeos.core.capture.Capture
@@ -63,13 +67,11 @@ class QueueViewModel(application: Application) : AndroidViewModel(application) {
         QueueUiState(captures, busy)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), QueueUiState())
 
-    init {
-        // While the queue is on screen, follow recent sends until they settle.
-        viewModelScope.launch {
-            while (true) {
-                followRecent(Duration.ofMinutes(30))
-                delay(5_000)
-            }
+    /** While the queue is on screen, follows recent sends until they settle. */
+    suspend fun follow() {
+        while (true) {
+            followRecent(Duration.ofMinutes(30))
+            delay(5_000)
         }
     }
 
@@ -105,6 +107,8 @@ fun QueueScreen(navigator: Navigator, viewModel: QueueViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { viewModel.follow() } }
 
     Scaffold(
         topBar = {
@@ -164,7 +168,7 @@ private fun CaptureCard(capture: Capture, onRetry: () -> Unit, onDelete: () -> U
                     TextButton(onClick = onRetry) { Text(if (failed) "Retry" else "Send now") }
                 }
                 if (capture.inboxItemId != null) TextButton(onClick = onOpenInbox) { Text("Open Inbox") }
-                if (capture.status != CaptureStatus.SENDING) TextButton(onClick = onDelete) { Text(if (capture.status == CaptureStatus.SENT) "Remove" else "Delete") }
+                TextButton(onClick = onDelete) { Text(if (capture.status == CaptureStatus.SENT) "Remove" else "Delete") }
             }
         }
     }

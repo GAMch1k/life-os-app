@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Size
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -73,8 +74,6 @@ data class PhotoState(
     val caption: String = "",
     val preparing: Boolean = false,
     val error: String? = null,
-    /** The first picker was opened (so an empty list means it was cancelled). */
-    val asked: Boolean = false,
 )
 
 /** P18-04: photos (camera or picker, up to five) into the Inbox as JPEGs. */
@@ -90,8 +89,6 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
         val file = File(cameraDir, "${UUID.randomUUID()}.jpg")
         return FileProvider.getUriForFile(getApplication(), "${getApplication<Application>().packageName}.files", file)
     }
-
-    fun asked() = state.update { it.copy(asked = true) }
 
     fun add(uris: List<Uri>) = state.update { current ->
         current.copy(photos = (current.photos + uris).distinct().take(MAX_PHOTOS), error = null)
@@ -140,6 +137,9 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
 fun PhotoCaptureScreen(navigator: Navigator, camera: Boolean, viewModel: PhotoViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var pendingCamera by rememberSaveable { mutableStateOf<Uri?>(null) }
+    // Saveable: a screen restored after process death (while the camera app
+    // was open) gets the photo back instead of opening the camera again.
+    var asked by rememberSaveable { mutableStateOf(false) }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
         val uri = pendingCamera
@@ -169,9 +169,11 @@ fun PhotoCaptureScreen(navigator: Navigator, camera: Boolean, viewModel: PhotoVi
 
     fun openGallery() = if (remaining > 1) pickMany.launch(images) else pickOne.launch(images)
 
+    // Preparing writes the JPEGs; leaving now would drop the photos.
+    BackHandler(enabled = state.preparing) {}
     LaunchedEffect(Unit) {
-        if (!state.asked) {
-            viewModel.asked()
+        if (!asked) {
+            asked = true
             if (camera) openCamera() else openGallery()
         }
     }

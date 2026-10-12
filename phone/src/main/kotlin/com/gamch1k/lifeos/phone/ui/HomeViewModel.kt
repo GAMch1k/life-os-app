@@ -87,7 +87,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch { graph.updates.noteLaunch()?.let { messageChannel.send(HomeMessage(it)) } }
         viewModelScope.launch { for (notice in graph.notices) messageChannel.send(HomeMessage(notice)) }
-        viewModelScope.launch { followLastCapture() }
     }
 
     fun refresh() {
@@ -151,8 +150,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Polls the newest capture until Life OS has settled it (in Inbox, processed), for at most [RECENT]. */
-    private suspend fun followLastCapture() {
+    /**
+     * Polls the newest capture until Life OS has settled it (in Inbox,
+     * processed), for at most [RECENT]. Home runs it only while it is visible.
+     */
+    suspend fun followLastCapture() {
         while (true) {
             delay(5_000)
             val latest = graph.captures.all().maxByOrNull { it.createdAt } ?: continue

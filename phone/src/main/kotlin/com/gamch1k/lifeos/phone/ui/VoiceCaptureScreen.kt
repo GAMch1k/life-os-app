@@ -86,8 +86,10 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         state.value = VoiceState.NeedsPermission
     }
 
+    /** Starts once: on entering the screen, or when the microphone permission arrives. */
     fun start() {
-        if (recorder.recording) return
+        val current = state.value
+        if (recorder.recording || (current != VoiceState.Starting && current != VoiceState.NeedsPermission)) return
         try {
             recorder.start(file) { viewModelScope.launch { stop("Reached the 20-minute limit.") } }
             state.value = VoiceState.Recording
@@ -159,6 +161,14 @@ fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewMod
     }
     // Android stops giving a background app the microphone: keep what was said.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.stop("Stopped when the screen was left.") }
+    // Back from the app settings with the microphone allowed.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (state == VoiceState.NeedsPermission &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) {
+            viewModel.start()
+        }
+    }
     BackHandler(enabled = state == VoiceState.Recording || state is VoiceState.Stopped) { confirmDiscard = true }
 
     Scaffold(topBar = { BackTopBar("Voice", onBack = { confirmDiscard = state == VoiceState.Recording || state is VoiceState.Stopped; if (!confirmDiscard) navigator.back() }) }) { padding ->

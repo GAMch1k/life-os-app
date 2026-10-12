@@ -6,6 +6,12 @@ import com.gamch1k.lifeos.core.api.CreateInboxItem
 import com.gamch1k.lifeos.core.api.InboxItem
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.api.ProcessingAttempt
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -188,6 +194,38 @@ class CaptureSenderTest {
         store.add(capture(CaptureKind.VOICE, files = listOf(File(stores.root, "gone.ogg"))))
         assertTrue(sender.send("c-voice") is SendOutcome.Failed)
         assertTrue(api.audioUploads.isEmpty())
+    }
+
+    @Test
+    fun `a job cancelled right after the voice upload keeps the job id, so it is not uploaded again`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        val cancelling = object : CaptureApi by api {
+            override suspend fun createAudioJob(file: File, sourceMetadata: JsonObject): AudioJob {
+                val job = api.createAudioJob(file, sourceMetadata)
+                currentCoroutineContext().cancel()
+                return job
+            }
+        }
+        val worker = launch { CaptureSender(store, cancelling, clock = { now }).send("c-voice") }
+        worker.join()
+        assertEquals("job-1", store.get("c-voice")!!.voiceJobId)
+        assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        assertEquals(1, api.audioUploads.size)
+    }
+
+    @Test
+    fun `a job cancelled mid-send goes back to the queue instead of staying SENDING`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.TEXT, "x"))
+        val hanging = object : CaptureApi by api {
+            override suspend fun createInboxItem(request: CreateInboxItem): InboxItem = awaitCancellation()
+        }
+        val worker = launch { CaptureSender(store, hanging, clock = { now }).send("c-text") }
+        delay(200)
+        assertEquals(CaptureStatus.SENDING, store.get("c-text")!!.status)
+        worker.cancelAndJoin()
+        assertEquals(CaptureStatus.PENDING, store.get("c-text")!!.status)
     }
 
     @Test

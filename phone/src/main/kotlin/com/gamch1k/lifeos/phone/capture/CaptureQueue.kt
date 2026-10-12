@@ -18,6 +18,8 @@ import com.gamch1k.lifeos.core.capture.CaptureStatus
 import com.gamch1k.lifeos.core.capture.CaptureStore
 import com.gamch1k.lifeos.core.capture.SendOutcome
 import com.gamch1k.lifeos.phone.graph
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -64,11 +66,27 @@ class CaptureQueue(context: Context, private val store: CaptureStore, private va
         work.enqueueUniqueWork(name(id), if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, request)
     }
 
-    /** On app start: everything not sent yet gets its job back (KEEP leaves running ones alone). */
+    /**
+     * On app start: everything not sent yet gets its job back. KEEP leaves a
+     * queued or running job alone (this start may be the one WorkManager made
+     * to run it), and a capture left SENDING by a killed process is resent by
+     * its job, so nothing here touches the stored status.
+     */
     suspend fun resumeAll() {
         for (capture in store.all()) {
-            if (capture.status == CaptureStatus.SENDING) store.update(capture.id) { it.copy(status = CaptureStatus.PENDING) }
             if (capture.status == CaptureStatus.PENDING || capture.status == CaptureStatus.SENDING) enqueue(capture.id)
+        }
+    }
+
+    /**
+     * Deletes capture directories no capture refers to (a recording abandoned
+     * when its process died), once they are an hour old.
+     */
+    suspend fun pruneOrphans(now: Long = System.currentTimeMillis()) {
+        val known = store.all().map { it.id }.toSet()
+        withContext(Dispatchers.IO) {
+            root.listFiles()?.filter { it.isDirectory && it.name !in known && now - it.lastModified() > 60 * 60 * 1000L }
+                ?.forEach { it.deleteRecursively() }
         }
     }
 

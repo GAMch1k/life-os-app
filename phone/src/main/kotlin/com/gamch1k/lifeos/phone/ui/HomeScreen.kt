@@ -58,7 +58,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.capture.CaptureStatus
@@ -80,6 +83,8 @@ fun HomeScreen(navigator: Navigator, viewModel: HomeViewModel = viewModel()) {
     val snackbar = remember { SnackbarHostState() }
     var photoChoice by remember { mutableStateOf(false) }
 
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { viewModel.followLastCapture() } }
     LaunchedEffect(Unit) {
         viewModel.messages.collect { message ->
             launch {

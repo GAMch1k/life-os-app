@@ -21,6 +21,7 @@ class LifeOsApp : Application() {
             // Captures whose work was lost (force stop, restore) go back to WorkManager.
             graph.queue.resumeAll()
             graph.captures.pruneSent(Instant.now(), Duration.ofDays(7))
+            graph.queue.pruneOrphans()
         }
     }
 }
