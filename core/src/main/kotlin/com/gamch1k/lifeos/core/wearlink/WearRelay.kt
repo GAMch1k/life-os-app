@@ -3,11 +3,11 @@ package com.gamch1k.lifeos.core.wearlink
 /**
  * The phone side of the link, as the phone app implements it.
  *
- * The phone app's `Application` implements [WearLinkHost]; the phone's
- * Data Layer listener (phone/…/wearlink/PhoneWearLinkService) asks it for
- * the two pieces below. Until it does, the listener hands over the token from
- * the network check's token store and relays nothing, so the watch calls
- * Life OS directly. See docs/wear.md, "What the phone implements".
+ * The phone app's `Application` implements [WearLinkHost] (since 0.3.0);
+ * the phone's Data Layer listener (phone/…/wearlink/PhoneWearLinkService)
+ * asks it for the two pieces below. Without it, the listener would hand over
+ * the token store's token and relay nothing, so the watch would call Life OS
+ * directly. See docs/wear.md, "What the phone app implements".
  */
 interface WearLinkHost {
     val wearTokenSource: WearTokenSource

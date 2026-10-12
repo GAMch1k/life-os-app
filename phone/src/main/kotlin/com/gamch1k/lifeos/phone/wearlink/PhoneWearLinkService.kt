@@ -24,15 +24,16 @@ import kotlinx.coroutines.tasks.await
  * starts it when the watch sends a request or opens a channel on a
  * `/lifeos/` path; the work itself is [PhoneWearLinkHandler]'s.
  *
- * The token source and the relay come from the app's `Application` when it
- * implements [WearLinkHost]. Until then: the token from the network check's
- * [ServiceTokenStore], and no relay (the watch then calls Life OS directly).
+ * The token source and the relay come from the app's `Application`, which
+ * implements [WearLinkHost] since 0.3.0. The fallback without it: the token
+ * store's token through [ServiceTokenStore], and no relay (the watch then
+ * calls Life OS directly).
  */
 class PhoneWearLinkService : WearableListenerService() {
     private val handler by lazy {
         val host = application as? WearLinkHost
         PhoneWearLinkHandler(
-            tokenSource = host?.wearTokenSource ?: networkCheckTokenSource(),
+            tokenSource = host?.wearTokenSource ?: fallbackTokenSource(),
             relay = host?.wearRelay ?: WearRelay.UNAVAILABLE,
         )
     }
@@ -69,8 +70,8 @@ class PhoneWearLinkService : WearableListenerService() {
         }
     }
 
-    // Stub until the phone app's token store implements WearTokenSource.
-    private fun networkCheckTokenSource() = WearTokenSource {
+    // Only without a WearLinkHost: the token entered at onboarding or under Settings.
+    private fun fallbackTokenSource() = WearTokenSource {
         ServiceTokenStore(applicationContext).load()?.let { token ->
             WearCredentials(baseUrl = "https://${LifeOsEndpoints.HOST}", clientId = token.clientId, clientSecret = token.clientSecret)
         }

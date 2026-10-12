@@ -149,7 +149,7 @@ What the phone app (P18-05) should set on each Life OS notification:
 
 All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements every piece: `LifeOsApp` is the `WearLinkHost` (`core/…/wearlink/PhoneWearLinkHost.kt`), `TokenStore` is the `WearTokenSource`, the relay is `LifeOsClient.relay()`, and the app pings the watch when the token is saved or removed and when Today's data changes (a refresh that found other Tasks or events, a Done, a push about Tasks or events). `PhoneWearLinkHostTest` runs it end to end through the real handler.
 
-1. **`WearLinkHost`**: the phone app's `Application` implements it, so the listener finds the two pieces below. Without it, the listener falls back to the stubs described under "Today's stubs".
+1. **`WearLinkHost`**: the phone app's `Application` implements it, so the listener finds the two pieces below. Without it, the listener falls back as described under "The listener's fallback" below.
 2. **`WearTokenSource.load(): WearCredentials?`**, implemented by the phone's token store: the base URL (`https://lifeos.gamch1k.com`) and the service token the watch should use, or null when there is none. With one Access service token per device (the plan), this is the watch's own token; until then, the phone's.
 3. **`WearRelay.execute(RelayHttpRequest): RelayHttpResponse`**, implemented with the phone's ECH-capable client:
    - send `method` to the base URL plus `path`, with `headers` (the actor is already among them on writes), the body, and the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers;
@@ -158,12 +158,12 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
    - it runs on a background thread; the watch waits about 30 seconds for small requests and 2 minutes for uploads.
 4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, Done or Snooze). Both are no-ops without a watch.
 
-**The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over `ServiceTokenStore`'s token (a read-only view of the token store) and relay nothing (`WearRelay.UNAVAILABLE`).
+**The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over the phone's token through `ServiceTokenStore` (a read-only view of the token store, which holds the token entered at the phone app's first run or under Settings → **Change token**) and relay nothing (`WearRelay.UNAVAILABLE`).
 
 ## Setting up the watch (the owner)
 
 1. **Install** the wear APK. Until P19-06 brings installs through the phone, this is ADB over Wi-Fi: on the watch, Settings › Developer options › Wireless debugging, pair, then `adb install -r lifeos-wear-<version>.apk`. Turn Wireless debugging off again afterwards.
-2. **Token**: the phone app must be connected (its onboarding). Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
+2. **Token**: the phone app must hold its service token, entered at its first run or under Settings → **Change token**; the watch needs none of its own. Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
 3. **Microphone**: the first recording asks for it. After "Don't allow", the recording screen offers **Open settings**.
 4. **Home key**: Settings › Advanced features › Customize buttons (Customize keys on older One UI Watch versions) › Home key › Double press › choose **Capture**. "Capture" is the app's second entry in the app list and opens straight into recording; choosing "Life OS" opens Home instead.
 5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same.

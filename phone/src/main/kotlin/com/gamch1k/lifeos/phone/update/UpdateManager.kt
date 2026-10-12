@@ -58,8 +58,9 @@ sealed interface UpdateState {
  * the authenticated client, check size and SHA-256, check that the archive is
  * this app at that version, and hand it to PackageInstaller with
  * USER_ACTION_NOT_REQUIRED. Android then installs it only if the release key
- * signed it; it asks the owner to confirm when it must (the first update after
- * a browser install, when Chrome is the installer of record).
+ * signed it. It asks the owner to confirm once, on the first self-update
+ * after a browser install (the browser is the installer of record); once Life
+ * OS installed the current version, later updates are silent.
  *
  * When: on app start (at most every 6 hours; only tells), daily from
  * [UpdateWorker] on an unmetered network (downloads, and installs at once
@@ -260,7 +261,8 @@ class UpdateManager(
                 setSize(file.length())
                 setInstallReason(PackageManager.INSTALL_REASON_USER)
                 // Silent when this app installed the current version and holds
-                // UPDATE_PACKAGES_WITHOUT_USER_ACTION; otherwise Android asks.
+                // UPDATE_PACKAGES_WITHOUT_USER_ACTION; otherwise (the first
+                // update after a browser install) Android asks once.
                 setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
             sessionId = installer.createSession(params)

@@ -26,9 +26,9 @@ class Connection(val baseUrl: String, val token: ServiceToken) {
  * its login page, which becomes [LifeOsException.AccessRedirect].
  *
  * Idempotent calls (reads, completing a Task, an Inbox capture with its
- * dedupe key, content-addressed media) are retried a few times on errors
- * that may pass ([LifeOsException.retryable]); the rest is left to the
- * capture queue.
+ * dedupe key, content-addressed media, a voice upload with its
+ * `Idempotency-Key`) are retried a few times on errors that may pass
+ * ([LifeOsException.retryable]); the rest is left to the capture queue.
  */
 class LifeOsClient(
     private val transport: HttpTransport,

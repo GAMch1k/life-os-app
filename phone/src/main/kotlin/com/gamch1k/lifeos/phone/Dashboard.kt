@@ -10,10 +10,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The Dashboard for everything the app does not do itself, in a Chrome
- * Custom Tab: Chrome has the Access login and ECH. Every Dashboard link in
- * the app (Home, Settings, notifications) goes through [open], the one place
- * to change if the Dashboard moves into an in-app WebView.
+ * The Dashboard for everything the app does not do itself, in a Custom Tab
+ * of the phone's default browser (Firefox and Chrome both provide them),
+ * which holds the Access login; no browser package is forced. Without
+ * Custom Tab support the link opens in the browser itself. Every Dashboard
+ * link in the app (Home, Settings, notifications) goes through [open], the
+ * one place to change if the Dashboard moves into an in-app WebView.
  */
 object Dashboard {
     fun open(context: Context, scope: CoroutineScope, path: String = "/") {

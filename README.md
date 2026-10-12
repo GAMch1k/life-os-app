@@ -8,7 +8,7 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 
 | Path | What |
 |---|---|
-| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules, and the network check. Every unit test lives here. |
+| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules, the phone–watch link, and the network check. Most unit tests live here; the wear app's are in `wear/src/test`. |
 | `phone/` | The phone app ([below](#the-phone-app)): onboarding, Today, capture with an offline queue, self-update, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
 | `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the next-event complication ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
@@ -135,8 +135,8 @@ To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) rem
 ### How it talks to Life OS
 
 - `core/…/api/LifeOsClient.kt` over `CronetTransport`: the embedded Cronet with the built-in DNS resolver (ECH), no QUIC, redirects never followed.
-- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<version>`.
-- Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads) are retried twice on errors that may pass.
+- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.3.1 (4)`.
+- Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads, voice uploads with an `Idempotency-Key`) are retried twice on errors that may pass.
 - The token is encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
 - For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the phone's token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a token or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
 
@@ -156,7 +156,7 @@ Voice, Photo and Text go into a queue (`core/…/capture`) that a WorkManager jo
 
 ### Updates (P18-09)
 
-The app reads `/android/updates` (the contract is `docs/operations/android-releases.md` in the life-os repository) when it starts (at most every 6 hours; it only shows a banner), once a day on an unmetered network (`UpdateWorker`: downloads, and installs at once when the app is not on screen), and on **Settings → Check for updates** (downloads and installs). It takes `apps.phone` only when its `versionCode` is higher than its own and the phone's API level reaches `minSdk`; it downloads through the authenticated client (resuming a partial file), refuses a file whose size or SHA-256 differs, checks that the archive is this package at that version, and installs it with a `PackageInstaller` session and `USER_ACTION_NOT_REQUIRED`. When Android still asks (the first update after a browser install, when Chrome is the installer of record), the app opens the confirmation, or offers it on Home. Without **Install unknown apps** for Life OS it leads to that setting. After a restart on a new version, Home says "Updated to x.y".
+The app reads `/android/updates` (the contract is `docs/operations/android-releases.md` in the life-os repository) when it starts (at most every 6 hours; it only shows a banner), once a day on an unmetered network (`UpdateWorker`: downloads, and installs at once when the app is not on screen), and on **Settings → Check for updates** (downloads and installs). It takes `apps.phone` only when its `versionCode` is higher than its own and the phone's API level reaches `minSdk`; it downloads through the authenticated client (resuming a partial file), refuses a file whose size or SHA-256 differs, checks that the archive is this package at that version, and installs it with a `PackageInstaller` session and `USER_ACTION_NOT_REQUIRED`. Android asks once, on the first self-update after a browser install (your browser is then the installer of record): the app opens the confirmation, or offers it on Home. Once Life OS installed the current version, later updates are silent. Without **Install unknown apps** for Life OS it leads to that setting. After a restart on a new version, Home says "Updated to x.y".
 
 ### Share, push, widgets (0.3.0)
 

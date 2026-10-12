@@ -4,11 +4,11 @@ The phone app's first screen answers one question: **can this phone reach Life O
 
 ## Why
 
-The owner's work Wi-Fi resets every TLS handshake that carries `lifeos.gamch1k.com` in clear SNI. Chrome still gets through, because Cloudflare publishes ECH (Encrypted Client Hello) for the hostname. The DNS HTTPS record carries `ech=…`, with the public name `cloudflare-ech.com`. Chrome reads it and sends only `cloudflare-ech.com` in clear. Android 16 has no platform ECH API, so the app embeds **Cronet**, Chromium's network stack, and turns on its **built-in DNS resolver**. That resolver queries HTTPS records, which the system's `getaddrinfo` cannot. The screen shows whether this works on the real phone and the real network.
+The owner's work Wi-Fi resets every TLS handshake that carries `lifeos.gamch1k.com` in clear SNI. The browser still gets through, because Cloudflare publishes ECH (Encrypted Client Hello) for the hostname. The DNS HTTPS record carries `ech=…`, with the public name `cloudflare-ech.com`. An ECH-capable browser reads it and sends only `cloudflare-ech.com` in clear. Android 16 has no platform ECH API, so the app embeds **Cronet**, Chromium's network stack, and turns on its **built-in DNS resolver**. That resolver queries HTTPS records, which the system's `getaddrinfo` cannot. The screen shows whether this works on the real phone and the real network.
 
 ## Using it
 
-1. Optional: under **Service token**, paste a Cloudflare Access service token's Client ID and Client Secret, and tap **Save token**.
+1. Open it from **Settings → Network check**. It uses the service token the app already holds (entered at the first run, or under Settings → **Change token**) and says so at the bottom of the screen, with the masked Client ID; without one, step 4 is skipped. The screen itself has no token fields since 0.2.0.
 2. Tap **Run check**. It takes a few seconds; every probe uses a fresh connection.
 3. Read the **Result** card, then tap **Copy report** and paste the text wherever it is needed. The report never contains the token or the phone's public IP.
 
@@ -66,7 +66,7 @@ This asks the phone's normal resolver, which honours Private DNS, for the `HTTPS
 
 ### 4. Service token request
 
-With a token saved, this sends `GET https://lifeos.gamch1k.com/api/tasks/v1/tasks?limit=1` through the same Cronet engine, with the headers `CF-Access-Client-Id`, `CF-Access-Client-Secret` and `X-Life-OS-Actor: user`. Redirects are not followed.
+With a token in the app, this sends `GET https://lifeos.gamch1k.com/api/tasks/v1/tasks?limit=1` through the same Cronet engine, with the headers `CF-Access-Client-Id`, `CF-Access-Client-Secret` and `X-Life-OS-Actor: user`. Redirects are not followed.
 
 | Status | Meaning |
 |---|---|
@@ -74,7 +74,7 @@ With a token saved, this sends `GET https://lifeos.gamch1k.com/api/tasks/v1/task
 | 302 to `…cloudflareaccess.com` | No Service Auth policy accepts this token. |
 | 401 | Access refused the token: the ID or secret is wrong or partial (the ID ends in `.access`), or the token expired. |
 
-The token is stored only on the phone. It is encrypted with an AES-256-GCM key that stays inside the Android Keystore, it is shown masked, and it is never logged or reported.
+The token is the app's own (the token store, see the README). It is stored only on the phone, encrypted with an AES-256-GCM key that stays inside the Android Keystore; the check shows it masked and never logs or reports it.
 
 ### Allow HTTP/3 (QUIC)
 

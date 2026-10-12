@@ -67,7 +67,7 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
-# Chrome Custom Tabs: the Dashboard opens in Chrome, which has the Access login and ECH.
+# Custom Tabs: the Dashboard opens in the default browser (Firefox, Chrome, …), which holds the Access login.
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }

@@ -148,8 +148,9 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                     updateActionLabel(state.update)?.let { label -> Button(onClick = viewModel::updateAction) { Text(label) } }
                 }
                 Text(
-                    "Life OS checks when it starts and once a day on Wi-Fi. Updates install without asking once " +
-                        "\"Install unknown apps\" is allowed for Life OS and this app installed the current version.",
+                    "Life OS checks when it starts and once a day on Wi-Fi; installing needs \"Install unknown apps\" for Life OS. " +
+                        "The first update after installing from your browser asks you to confirm once; " +
+                        "after that, updates install without asking.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -162,7 +163,7 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
             }
 
             SectionCard("Dashboard") {
-                Text("Everything else (Finance, Food, the Inbox, Calendar) is in the Dashboard, in Chrome.", style = MaterialTheme.typography.bodySmall)
+                Text("Everything else (Finance, Food, the Inbox, Calendar) is in the Dashboard, in your browser.", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { Dashboard.open(context, scope, "/") }) { Text("Open the Dashboard") }
             }
 
