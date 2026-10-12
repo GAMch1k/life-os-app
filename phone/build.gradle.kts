@@ -60,4 +60,10 @@ dependencies {
     implementation(libs.unifiedpush.connector)
     implementation(libs.unifiedpush.embedded.fcm.distributor)
     implementation(libs.androidx.glance.appwidget)
+
+    // The watch setup (P19-06): pairing with and installing onto the watch over Wireless debugging.
+    implementation(libs.libadb.android)
+    implementation(libs.conscrypt.android)
+    implementation(libs.bouncycastle.bcpkix)
+    implementation(libs.bouncycastle.bcprov)
 }

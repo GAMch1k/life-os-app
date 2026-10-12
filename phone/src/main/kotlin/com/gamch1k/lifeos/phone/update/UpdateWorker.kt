@@ -12,13 +12,20 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.gamch1k.lifeos.phone.graph
+import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
-/** The daily update check, on an unmetered network. */
+/**
+ * The daily update check, on an unmetered network: the watch app first (its
+ * push needs this process), then the phone's own update, which may install
+ * and so end the process.
+ */
 class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        applicationContext.graph.updates.check(UpdateManager.Trigger.DAILY)
+        val graph = applicationContext.graph
+        graph.watchUpdates.check(WatchUpdateManager.Trigger.DAILY)
+        graph.updates.check(UpdateManager.Trigger.DAILY)
         return Result.success()
     }
 

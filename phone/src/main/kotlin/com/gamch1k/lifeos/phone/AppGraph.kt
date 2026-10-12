@@ -31,6 +31,10 @@ import com.gamch1k.lifeos.phone.push.PushManager
 import com.gamch1k.lifeos.phone.today.TodayRepository
 import com.gamch1k.lifeos.phone.today.TodayWidget
 import com.gamch1k.lifeos.phone.update.UpdateManager
+import com.gamch1k.lifeos.phone.watch.WatchLink
+import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
+import com.gamch1k.lifeos.phone.watchsetup.AdbIdentity
+import com.gamch1k.lifeos.phone.watchsetup.StoredSetupMemory
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,10 +92,19 @@ class AppGraph(private val app: Application) {
 
     val updates = UpdateManager(app, client, settings, scope, foreground)
 
+    /** The watch app: its version, and updates through the phone (P19-06). */
+    val watchLink = WatchLink(app)
+    val watchUpdates = WatchUpdateManager(app, client, settings, watchLink)
+
+    /** For Settings › Watch › Set up the watch app. */
+    val watchSetupMemory = StoredSetupMemory(settings, watchUpdates)
+    val adbIdentity by lazy { AdbIdentity(app) }
+
     /** Short messages for Home's snackbar from screens that just closed ("Voice note queued"). */
     val notices = Channel<String>(Channel.BUFFERED)
 
     init {
+        scope.launch { watchUpdates.load() }
         app.registerActivityLifecycleCallbacks(
             object : Application.ActivityLifecycleCallbacks {
                 private var started = 0
@@ -137,7 +150,9 @@ class AppGraph(private val app: Application) {
     /**
      * Sign out: Life OS forgets this phone's push subscription (while the token
      * still works), then the token, the cached Today, the queue with its
-     * files and downloaded updates go; the watch and the widgets hear of it.
+     * files and downloaded updates (the phone's and the watch's) go; the watch
+     * and the widgets hear of it. The watch's pairing key stays: it is no
+     * Life OS credential, and a later rescue may need it.
      */
     suspend fun signOut() {
         push.unregister()
@@ -145,6 +160,7 @@ class AppGraph(private val app: Application) {
         today.clear()
         queue.clear()
         updates.forget()
+        watchUpdates.forget()
         credentialsChanged()
         TodayWidget.refreshAll(app)
     }
