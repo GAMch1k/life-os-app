@@ -79,13 +79,14 @@ body             header.bodyLength bytes, raw (audio stays binary)
 
 ### Idempotency
 
-Voice has no `Idempotency-Key` today (the Life OS repository's `services/voice/internal/api/handler.go` doesn't read one), so the watch does what it can:
+Voice honours `Idempotency-Key` on `POST /v1/audio-jobs` since BUG-40: the same key with the same audio, `source` and `sourceMetadata` (compared as JSON) returns the job the first upload created (202); the same key with anything else is 409 `idempotency_conflict`.
 
-- every upload carries the capture's id, made when recording starts, as `Idempotency-Key` and as `sourceMetadata.captureId`;
-- a capture with a Voice job is never uploaded again; each upload is claimed under the queue's lock; an outcome for a capture that moved on is ignored;
-- the phone keeps the reply of every write with a key for 15 minutes (`RelayReplayCache`). If the reply to the watch got lost, the watch's retry gets the stored reply and no second job is created. A retry while the first try still runs waits for it.
+- Every upload carries the capture's id, made when recording starts, as `Idempotency-Key` and as `sourceMetadata.captureId`. The metadata is built only from the persisted capture (id, `createdAt`, time zone, duration), never from the attempt, so every retry sends the same JSON, also after a restart (`CaptureUploaderTest`). A 409 fails the capture with "Voice holds a different recording under this capture's id".
+- A capture with a Voice job is never uploaded again; each upload is claimed under the queue's lock; an outcome for a capture that moved on is ignored.
+- The phone keeps the reply of every write with a key for 15 minutes (`RelayReplayCache`), so a retry through the phone is answered without even reaching Voice. A retry while the first try still runs waits for it.
+- The owner's **Retry** uploads again with the same key, so for a capture whose job exists (a transcription without speech) Voice returns that same job.
 
-What's left: a reply lost on the **direct** path, or across a phone restart, can still create a second job. The fix belongs in Voice: honour `Idempotency-Key` as Tasks does (store the key with the job; the same key returns the same job). The watch already sends it. Completing a task sends one key per tap (`complete:<uuid>`), so a lost reply is replayed while a later tap on a reopened task still completes it.
+Completing a task sends one key per tap (`complete:<uuid>`), so a lost reply is replayed while a later tap on a reopened task still completes it.
 
 ## Voice capture
 
@@ -137,7 +138,7 @@ What the phone app (P18-05) should set on each Life OS notification:
 
 ## What the phone app implements
 
-All in `core/…/wearlink/WearRelay.kt`. The listener (`PhoneWearLinkService`) and its manifest entry exist already.
+All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements every piece: `LifeOsApp` is the `WearLinkHost` (`core/…/wearlink/PhoneWearLinkHost.kt`), `TokenStore` is the `WearTokenSource`, the relay is `LifeOsClient.relay()`, and the app pings the watch when the token is saved or removed and when Today's data changes (a refresh that found other Tasks or events, a Done, a push about Tasks or events). `PhoneWearLinkHostTest` runs it end to end through the real handler.
 
 1. **`WearLinkHost`**: the phone app's `Application` implements it, so the listener finds the two pieces below. Without it, the listener falls back to the stubs described under "Today's stubs".
 2. **`WearTokenSource.load(): WearCredentials?`**, implemented by the phone's token store: the base URL (`https://lifeos.gamch1k.com`) and the service token the watch should use, or null when there is none. With one Access service token per device (the plan), this is the watch's own token; until then, the phone's.
@@ -148,12 +149,12 @@ All in `core/…/wearlink/WearRelay.kt`. The listener (`PhoneWearLinkService`) a
    - it runs on a background thread; the watch waits about 30 seconds for small requests and 2 minutes for uploads.
 4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, Done or Snooze). Both are no-ops without a watch.
 
-**Today's stubs.** Until the `Application` implements `WearLinkHost`, the listener hands over the token saved on the network check screen (`ServiceTokenStore`, with `LifeOsEndpoints.HOST`), and relays nothing (`WearRelay.UNAVAILABLE`, error `relay_unavailable`). The watch then calls Life OS directly with that token: everything works except the relay.
+**The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over `ServiceTokenStore`'s token (a read-only view of the token store) and relay nothing (`WearRelay.UNAVAILABLE`).
 
 ## Setting up the watch (the owner)
 
 1. **Install** the wear APK. Until P19-06 brings installs through the phone, this is ADB over Wi-Fi: on the watch, Settings › Developer options › Wireless debugging, pair, then `adb install -r lifeos-wear-<version>.apk`. Turn Wireless debugging off again afterwards.
-2. **Token**: the phone app must hold a token (today: saved on its network check screen). Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
+2. **Token**: the phone app must be connected (its onboarding). Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
 3. **Microphone**: the first recording asks for it. After "Don't allow", the recording screen offers **Open settings**.
 4. **Home key**: Settings › Advanced features › Customize buttons (Customize keys on older One UI Watch versions) › Home key › Double press › choose **Capture**. "Capture" is the app's second entry in the app list and opens straight into recording; choosing "Life OS" opens Home instead.
 5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same.

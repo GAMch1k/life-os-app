@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.gamch1k.lifeos.core.api.Connection
+import com.gamch1k.lifeos.core.wearlink.WearCredentials
+import com.gamch1k.lifeos.core.wearlink.WearTokenSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -127,7 +129,7 @@ class KeystoreCipher(private val alias: String = "lifeos-service-token") : Secre
  * only as [SecretCipher] ciphertext in the DataStore; the address is plain.
  * Nothing here logs.
  */
-class TokenStore(private val store: DataStore<Preferences>, private val cipher: SecretCipher) {
+class TokenStore(private val store: DataStore<Preferences>, private val cipher: SecretCipher) : WearTokenSource {
     /** The last ciphertext opened and its result, so a request costs no Keystore work. */
     @Volatile
     private var opened: Pair<List<String?>, Connection?>? = null
@@ -136,6 +138,9 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     val connection: Flow<Connection?> = store.data.map(::open)
 
     suspend fun current(): Connection? = connection.first()
+
+    /** What the watch gets (docs/wear.md): the phone's server and token, until each device has its own. */
+    override suspend fun load(): WearCredentials? = current()?.let { WearCredentials(it.baseUrl, it.token.clientId, it.token.clientSecret) }
 
     /** The saved server address, or the default. */
     suspend fun serverUrl(): String = store.data.first()[SERVER_URL] ?: ServerUrl.DEFAULT

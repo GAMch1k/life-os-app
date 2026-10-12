@@ -126,8 +126,9 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val previous = graph.tokens.serverUrl()
             graph.tokens.save(url, token)
-            if (previous != url) graph.homeCache.clear()
-            graph.queue.retryAuthFailures()
+            if (previous != url) graph.today.clear()
+            // The watch, the push subscription and captures that failed on a bad token.
+            graph.tokenSaved()
             state.update { it.copy(saving = false, clientSecret = "") }
             onSaved()
         }
