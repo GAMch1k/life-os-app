@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -22,5 +23,12 @@ dependencies {
     implementation(libs.cronet.bundled)
     implementation(libs.kotlinx.coroutines.android)
 
+    // The phone–watch link (core/…/wearlink): both apps talk over the Wear OS
+    // Data Layer, so its API is part of core's.
+    api(libs.play.services.wearable)
+    api(libs.kotlinx.coroutines.play.services)
+    implementation(libs.kotlinx.serialization.json)
+
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

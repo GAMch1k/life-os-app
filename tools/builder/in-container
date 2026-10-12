@@ -95,11 +95,11 @@ verify_and_copy() { # <module> -> prints the release.json entry
 
 case "${1:-}" in
   test)
-    gradle :core:testDebugUnitTest
+    gradle testDebugUnitTest
     ;;
   release)
     [[ -n ${LIFEOS_KEYSTORE_PROPERTIES:-} ]] || die "LIFEOS_KEYSTORE_PROPERTIES is not set"
-    gradle :core:testDebugUnitTest :phone:assembleRelease :wear:assembleRelease
+    gradle testDebugUnitTest :phone:assembleRelease :wear:assembleRelease
     built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p dist
     rm -f dist/*.apk dist/release.json
