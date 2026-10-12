@@ -8,9 +8,9 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 
 | Path | What |
 |---|---|
-| `core/` | Android library: networking (embedded Cronet), configuration, shared code. Today it holds the network check and the service-token store. |
+| `core/` | Android library: networking (embedded Cronet), configuration, shared code. Today it holds the network check, the service-token store, and the phone–watch link (`wearlink`). |
 | `phone/` | The phone app. Its first screen is the **Network check** ([docs/network-check.md](docs/network-check.md)). |
-| `wear/` | The Wear OS app. For now one screen: "Life OS" and the version. |
+| `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the next-event complication ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
 | `version.properties` | The one version of both apps. |
@@ -20,7 +20,7 @@ Both apps use the `applicationId` **`com.gamch1k.lifeos`**. Phone: minSdk 34, ta
 
 Main versions: AGP 9.4.1 (built-in Kotlin), Kotlin 2.4.21, Gradle 9.7.1, Compose BOM 2026.09.00, Compose for Wear OS Material 3 1.7.1, Cronet 500.1.0 (`org.chromium.net:cronet-bundled`, Chromium 155.0.8059.16), JDK 21.
 
-The phone APK is about 10 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, and the APK carries only arm64 code. The wear APK is about 1.4 MB.
+The phone APK is about 10 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, and the APK carries only arm64 code. The wear APK is about 15 MB: it embeds Cronet too (for calls without the phone), for arm64 and 32-bit ARM, which is 11 MB of it.
 
 ## Building
 
@@ -123,4 +123,4 @@ To release:
 
 The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes.
 
-Until the Data Layer flow exists, the wear APK goes onto the watch with `adb` over Wi-Fi debugging: `adb install lifeos-wear-….apk`.
+Until installs through the phone exist (P19-06), the wear APK goes onto the watch with `adb` over Wi-Fi debugging: `adb install lifeos-wear-….apk`. The watch's setup (token, tiles, complication, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).

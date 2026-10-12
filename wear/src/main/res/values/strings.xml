@@ -1,4 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Life OS</string>
+    <!-- The second launcher entry: opens straight into recording (assign it to the Home key's double press). -->
+    <string name="capture_launcher">Capture</string>
+    <string name="capture_tile">Life OS Capture</string>
+    <string name="today_tile">Life OS Today</string>
+    <string name="next_event_complication">Life OS next event</string>
+
+    <string name="record">Record</string>
+    <string name="record_voice_note">Record a voice note</string>
+    <string name="recording">Recording</string>
+    <string name="recording_channel">Recording</string>
+    <string name="send">Send</string>
+    <string name="cancel">Cancel</string>
+    <string name="done">Done</string>
+    <string name="retry">Retry</string>
+    <string name="delete">Delete</string>
+
+    <string name="mic_permission_title">Microphone</string>
+    <string name="mic_permission_text">Life OS records voice notes only while you see this screen or the recording notice.</string>
+    <string name="mic_permission_allow">Allow</string>
+    <string name="mic_permission_settings">Open settings</string>
+    <string name="mic_permission_denied">Allow the microphone for Life OS in the watch settings.</string>
+
+    <string name="state_queued">Queued</string>
+    <string name="state_sending">Sending…</string>
+    <string name="state_waiting">Waiting for phone</string>
+    <string name="state_sent">Sent · transcribing</string>
+    <string name="state_in_inbox">In Inbox</string>
+    <string name="state_failed">Failed · tap to retry</string>
+    <string name="too_short">Too short, nothing sent</string>
+    <string name="cancelled">Cancelled</string>
+    <string name="recent">Recent</string>
+
+    <string name="today">Today</string>
+    <string name="tomorrow">Tomorrow</string>
+    <string name="tasks">Tasks</string>
+    <string name="events">Events</string>
+    <string name="next_event">Next</string>
+    <string name="no_more_events">No more events</string>
+    <string name="no_events_short">Free</string>
+    <string name="nothing_today">Nothing left today</string>
+    <string name="refresh">Refresh</string>
+    <string name="updated_at">Updated %1$s</string>
+    <string name="task_due">%1$s, due %2$s</string>
+    <string name="next_event_description">Next: %1$s at %2$s</string>
+    <string name="mark_done">Mark done?</string>
+    <string name="marked_done">Done</string>
+    <string name="could_not_complete">Not done</string>
+
+    <string name="connection">Connection</string>
+    <string name="phone">Phone</string>
+    <string name="phone_connected">Connected: relays through %1$s</string>
+    <string name="phone_not_connected">Not connected: direct calls</string>
+    <string name="token">Token</string>
+    <string name="token_received">From the phone, %1$s</string>
+    <string name="token_missing">None yet</string>
+    <string name="get_token">Get token from phone</string>
+    <string name="token_fetch_received">Token received</string>
+    <string name="token_fetch_phone_has_none">The phone has no token. Save it in the phone app.</string>
+    <string name="token_fetch_no_phone">Phone not connected</string>
+    <string name="token_fetch_failed">The phone answered something unreadable</string>
+    <string name="test_connection">Test connection</string>
+    <string name="version">Version %1$s (%2$d)</string>
 </resources>
