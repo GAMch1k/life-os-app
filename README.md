@@ -28,7 +28,7 @@ Builds run on the Life OS server, never on a laptop. The host needs only Docker 
 
 ```sh
 tools/build              # release: unit tests, signed APKs of both apps, checks, dist/
-tools/build test         # unit tests only (no signing material needed)
+tools/build test         # unit tests only, of the release variant (no signing material needed)
 tools/build gradle ARGS  # any Gradle command in the builder, e.g. tools/build gradle :phone:dependencies
 tools/build image        # only build the builder image
 ```
@@ -39,11 +39,14 @@ What `tools/build` does:
 - It builds the builder image from `tools/builder/Dockerfile`, or reuses it. The image tag is the Dockerfile's hash, and older builder images are removed. The image holds Temurin JDK 21, Android command-line tools 23.0, `platforms;android-37.0`, `build-tools;36.1.0` and platform-tools 37.0.1. All of them are pinned, and the image build fails if the SDK manager delivers other revisions. The image is about 1 GB.
 - It runs Gradle in a container limited to 3 GiB of memory (no swap) and 2 CPUs, as uid 1000, with the repository mounted at `/workspace`.
 - It keeps the Gradle cache in the named Docker volume `lifeos-android-gradle`. To start clean, run `docker volume rm lifeos-android-gradle`.
-- `gradle.properties` keeps the one Gradle JVM small: `-Xmx1536m`, metaspace capped at 512 MiB, no daemon, Kotlin compiled in-process, and two workers.
-- At the end it prints the container's peak memory, sampled from its cgroup:
+- A release runs three Gradle invocations, each in a fresh JVM, so the peak is that of the largest step rather than of everything one JVM ever loaded: the unit tests (`testReleaseUnitTest`), then `:phone:assembleRelease`, then `:wear:assembleRelease`, both with one worker so R8 and lint never run side by side. The unit tests run against the release variant (`android.onlyEnableUnitTestForTheTestedBuildType=false`), whose classes the APKs are built from, so nothing is compiled twice.
+- `gradle.properties` keeps each Gradle JVM small: `-Xmx1536m` as a ceiling, the serial collector told to keep only 20–40 % of the heap free (so the heap stays near the live data, about 550 MiB at R8's peak), metaspace capped at 512 MiB, no daemon, Kotlin compiled in-process. `in-container` also sets `MALLOC_ARENA_MAX=2` and a small JVM for the Gradle client, which only relays output.
+- After each step and at the end it prints the container's peak memory and the step's time, sampled from its cgroup:
   - **process memory**: what the processes really use;
   - **working set**: what `docker stats` shows;
-  - **cgroup peak**: this also counts page cache, so it can reach the limit harmlessly.
+  - **cgroup peak** (end only): this also counts page cache, so it can reach the limit harmlessly.
+
+  Measured on a cold release build without the build cache: 473 s and a peak process memory of 1564 MiB (cgroup peak 2076 MiB) with these settings, against 562 s and 2668 MiB (cgroup peak 3036 MiB) with 0.3.0's (one invocation, two workers, the parallel collector). R8 is most of the time (about 150 s for the phone, 135 s for the wear app). The configuration cache stays off: it would store the signing configuration, passwords included, in `.gradle/configuration-cache` (encrypted, with the key in the Gradle volume), and a release's changed `version.properties` would invalidate it anyway.
 
 ## Signing
 

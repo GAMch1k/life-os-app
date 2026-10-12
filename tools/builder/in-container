@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Runs inside the builder container; start it through tools/build, not directly.
 #
-#   in-container test     unit tests
+#   in-container test     unit tests (of the release variant)
 #   in-container release  unit tests, signed release APKs, checks, dist/
+#
+# Each step is its own Gradle invocation and prints its time and peak memory.
 set -euo pipefail
 
 # The release signing certificate (public information, not a secret).
@@ -13,42 +15,80 @@ die() { echo "in-container: $*" >&2; exit 1; }
 
 gradle() { ./gradlew --no-daemon --console=plain "$@"; }
 
+# The Gradle client (the wrapper's JVM) only relays the build's output; keep
+# it small. The build JVM's own settings are org.gradle.jvmargs.
+export GRADLE_OPTS="-XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m"
+# Fewer glibc malloc arenas for the JVMs' native memory (JIT compilers, zip,
+# R8, lint): less fragmentation, a slightly smaller resident size.
+export MALLOC_ARENA_MAX=2
+
 # Memory of this container, sampled every second from its cgroup:
 #   process memory = "anon" (JVM heaps, metaspace, native memory of every process);
 #   working set    = usage minus inactive page cache (what `docker stats` shows);
 #   cgroup peak    = memory.peak, which also counts the page cache of every file
 #                    read or written, so it climbs to the limit while staying harmless.
+# The sampler keeps the peaks of the whole run and of the current step; USR1
+# starts a new step.
 cgroup=/sys/fs/cgroup
 peaks=/tmp/memory-peaks
 sample_memory() {
-  local peak_anon=0 peak_ws=0 anon inactive current
+  local peak_anon=0 peak_ws=0 step_anon=0 step_ws=0 anon inactive current
+  trap 'step_anon=0; step_ws=0' USR1
   while sleep 1; do
     anon=$(awk '$1 == "anon" { print $2 }' "$cgroup/memory.stat")
     inactive=$(awk '$1 == "inactive_file" { print $2 }' "$cgroup/memory.stat")
     current=$(cat "$cgroup/memory.current")
     if ((anon > peak_anon)); then
       peak_anon=$anon
-      ps -eo rss=,comm= --sort=-rss | head -n 5 | awk '{ printf "%s %d MiB; ", $2, $1 / 1024 }' > "$peaks.ps"
+      # The five largest processes; Gradle's JVMs are named: GradleDaemon (the build),
+      # GradleWrapper (the client), GradleWorkerMain (a test JVM).
+      ps -eo rss=,args= --sort=-rss | head -n 5 | awk '{
+        name = $2; sub(".*/", "", name)
+        for (i = 2; i <= NF; i++) {
+          if ($i ~ /gradle-wrapper[.]jar$/) { name = "GradleWrapper"; break }
+          if ($i ~ /^(org|worker)[.].*[.](GradleDaemon|Gradle[A-Za-z]*Main)$/) { name = $i; sub(".*[.]", "", name); break }
+        }
+        printf "%s %d MiB; ", name, $1 / 1024
+      }' > "$peaks.ps"
     fi
+    ((anon > step_anon)) && step_anon=$anon
     ((current - inactive > peak_ws)) && peak_ws=$((current - inactive))
-    echo "$peak_anon $peak_ws" > "$peaks"
+    ((current - inactive > step_ws)) && step_ws=$((current - inactive))
+    echo "$peak_anon $peak_ws $step_anon $step_ws" > "$peaks"
   done
 }
 report_memory() {
   kill "$sampler" 2> /dev/null || true
   [[ -r $peaks ]] || return 0
   local anon ws peak
-  read -r anon ws < "$peaks"
+  read -r anon ws _ < "$peaks"
   peak=$(cat "$cgroup/memory.peak" 2> /dev/null || echo 0)
   echo "memory: peak process memory $((anon / 1048576)) MiB, peak working set $((ws / 1048576)) MiB," \
     "cgroup peak incl. page cache $((peak / 1048576)) MiB, limit $(($(cat "$cgroup/memory.max") / 1048576)) MiB"
   echo "largest processes at the process-memory peak: $(cat "$peaks.ps" 2> /dev/null)"
 }
+sampler=
 if [[ -r $cgroup/memory.stat ]]; then
   sample_memory &
   sampler=$!
   trap report_memory EXIT
 fi
+
+# step <name> <gradle arguments...>: one Gradle invocation, so one fresh JVM.
+# A JVM's heap, metaspace and code cache hardly shrink once grown, so running
+# the unit tests and each app in their own JVM keeps the peak at the largest
+# step instead of everything the build ever loaded.
+step() {
+  local name=$1 start=$SECONDS step_anon=0 step_ws=0
+  shift
+  gradle "$@"
+  if [[ -n $sampler ]]; then
+    sleep 1
+    [[ -r $peaks ]] && read -r _ _ step_anon step_ws < "$peaks"
+    kill -USR1 "$sampler" 2> /dev/null || true
+  fi
+  echo "step $name: $((SECONDS - start)) s, peak process memory $((step_anon / 1048576)) MiB, peak working set $((step_ws / 1048576)) MiB" >&2
+}
 
 # Reads one field out of `aapt2 dump badging` output.
 badging_field() { # <badging> <regex with one group>
@@ -95,11 +135,17 @@ verify_and_copy() { # <module> -> prints the release.json entry
 
 case "${1:-}" in
   test)
-    gradle testDebugUnitTest
+    step "unit tests" testReleaseUnitTest
     ;;
   release)
     [[ -n ${LIFEOS_KEYSTORE_PROPERTIES:-} ]] || die "LIFEOS_KEYSTORE_PROPERTIES is not set"
-    gradle testDebugUnitTest :phone:assembleRelease :wear:assembleRelease
+    # The unit tests run against the release variant, as in `test`: its
+    # classes are the ones the APKs are built from, so nothing is compiled
+    # twice. One worker while assembling: R8 and lint, each wanting much of
+    # the heap, never run side by side.
+    step "unit tests" testReleaseUnitTest
+    step phone --max-workers=1 :phone:assembleRelease
+    step wear --max-workers=1 :wear:assembleRelease
     built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p dist
     rm -f dist/*.apk dist/release.json
