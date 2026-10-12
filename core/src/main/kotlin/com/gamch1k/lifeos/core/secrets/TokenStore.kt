@@ -204,12 +204,21 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         return migrated
     }
 
-    private companion object {
-        val SERVER_URL = stringPreferencesKey("server-url")
-        val CLIENT_ID = stringPreferencesKey("client-id")
-        val CLIENT_SECRET = stringPreferencesKey("client-secret")
-        const val LEGACY_PREFERENCES = "service-token"
-        const val LEGACY_ID = "client-id"
-        const val LEGACY_SECRET = "client-secret"
+    /** Makes this the store [ServiceTokenStore] reads; the app calls it once at start. */
+    fun install() {
+        installed = this
+    }
+
+    companion object {
+        @Volatile
+        internal var installed: TokenStore? = null
+            private set
+
+        private val SERVER_URL = stringPreferencesKey("server-url")
+        private val CLIENT_ID = stringPreferencesKey("client-id")
+        private val CLIENT_SECRET = stringPreferencesKey("client-secret")
+        private const val LEGACY_PREFERENCES = "service-token"
+        private const val LEGACY_ID = "client-id"
+        private const val LEGACY_SECRET = "client-secret"
     }
 }

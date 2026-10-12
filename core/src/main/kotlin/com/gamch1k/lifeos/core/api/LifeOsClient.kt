@@ -154,6 +154,47 @@ class LifeOsClient(
             timeoutMillis = 15 * 60_000L,
         )
 
+    // ---- Relay (the watch's requests through the phone)
+
+    /**
+     * Sends a request on behalf of another client, the watch (docs/wear.md):
+     * [pathAndQuery] as given (already encoded), [headers] as given, the
+     * service token added, redirects not followed, and every HTTP answer
+     * returned as it is, whatever its status. Throws
+     * [LifeOsException.NotSignedIn] without a token, and [LifeOsException.Offline],
+     * [LifeOsException.Timeout] or [LifeOsException.Local] when no answer came.
+     * Never retried: the caller decides.
+     */
+    suspend fun relay(method: String, pathAndQuery: String, headers: Map<String, String>, body: ByteArray?, timeoutMillis: Long): HttpResponse {
+        val target = connection() ?: throw LifeOsException.NotSignedIn()
+        require(pathAndQuery.startsWith("/")) { "the path must start with /" }
+        val contentType = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value
+        val request = HttpRequest(
+            method = method,
+            url = target.baseUrl.trimEnd('/') + pathAndQuery,
+            headers = buildMap {
+                put("User-Agent", userAgent)
+                headers.forEach { (name, value) ->
+                    // The body carries its own Content-Type; the token is always the phone's.
+                    if (!name.equals("Content-Type", ignoreCase = true) && !name.startsWith("CF-Access-", ignoreCase = true)) put(name, value)
+                }
+                put("CF-Access-Client-Id", target.token.clientId)
+                put("CF-Access-Client-Secret", target.token.clientSecret)
+            },
+            body = body?.let { RequestBody.Bytes(contentType ?: "application/octet-stream", it) },
+            timeoutMillis = timeoutMillis,
+        )
+        return try {
+            transport.execute(request)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: TransportException) {
+            throw mapTransport(error)
+        } catch (error: java.io.IOException) {
+            throw LifeOsException.Local(error.message ?: error.javaClass.simpleName, error)
+        }
+    }
+
     // ---- Plumbing
 
     private suspend fun <T> get(path: String, query: List<Pair<String, String>>, serializer: KSerializer<T>): T =

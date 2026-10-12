@@ -53,7 +53,7 @@ class AppGraph(private val app: Application) {
     private val queueData: DataStore<Preferences> = store("captures")
     private val cacheData: DataStore<Preferences> = store("cache")
 
-    val tokens = TokenStore(settings, KeystoreCipher())
+    val tokens = TokenStore(settings, KeystoreCipher()).apply { install() }
 
     val client = LifeOsClient(
         transport = LazyTransport { CronetTransport.create(app) },

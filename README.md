@@ -138,6 +138,7 @@ To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) rem
 - Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<version>`.
 - Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads) are retried twice on errors that may pass.
 - The token is encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
+- For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the phone's token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a token or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
 
 ### Today
 

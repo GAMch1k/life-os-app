@@ -1,0 +1,15 @@
+package com.gamch1k.lifeos.core.secrets
+
+import android.content.Context
+import kotlinx.coroutines.runBlocking
+
+/**
+ * The 0.1 network check's token store, kept as a read-only view of the app's
+ * [TokenStore] for code that still asks for it by this name (the watch link's
+ * fallback, until the phone app implements its WearLinkHost). The token
+ * itself lives only in the TokenStore, which the app installs at start.
+ */
+class ServiceTokenStore(@Suppress("UNUSED_PARAMETER") context: Context) {
+    /** Blocks briefly; call it off the main thread. Null when signed out. */
+    fun load(): ServiceToken? = TokenStore.installed?.let { store -> runBlocking { store.current()?.token } }
+}

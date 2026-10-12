@@ -242,6 +242,35 @@ class LifeOsClientTest {
     }
 
     @Test
+    fun `a relayed request returns every answer as it is, with the phone's token`() = runBlocking {
+        transport.redirect(302, "https://team.cloudflareaccess.com/cdn-cgi/access/login").json(500, """{"error":{"code":"internal_error","message":"x"}}""")
+        val redirect = client.relay(
+            "POST",
+            "/api/inbox/v1/inbox-items?x=1",
+            mapOf("X-Life-OS-Actor" to "user", "Content-Type" to "application/json", "CF-Access-Client-Id" to "forged"),
+            "{}".toByteArray(),
+            timeoutMillis = 30_000,
+        )
+        assertEquals(302, redirect.status)
+        assertEquals(500, client.relay("GET", "/api/tasks/v1/tasks", emptyMap(), null, 30_000).status)
+        val sent = transport.requests.first()
+        assertEquals("https://lifeos.example.com/api/inbox/v1/inbox-items?x=1", sent.url)
+        assertEquals(FakeTransport.TOKEN.clientId, sent.headers["CF-Access-Client-Id"])
+        assertEquals("user", sent.headers["X-Life-OS-Actor"])
+        assertFalse(sent.headers.containsKey("Content-Type"))
+        assertEquals("application/json", sent.body!!.contentType)
+        assertEquals(2, transport.requests.size)
+    }
+
+    @Test
+    fun `a relayed request without a token or a network says so`() {
+        expect<LifeOsException.NotSignedIn> { FakeTransport.client(transport, connection = null).relay("GET", "/api/x", emptyMap(), null, 1_000) }
+        transport.fail(TransportException.Network("ERR_CONNECTION_RESET (-101)", offline = false))
+        expect<LifeOsException.Offline> { client.relay("GET", "/api/x", emptyMap(), null, 1_000) }
+        assertEquals(1, transport.requests.size)
+    }
+
+    @Test
     fun `the update manifest is read from android updates`() = runBlocking {
         transport.json(200, """{"formatVersion":1,"updatedAt":"2026-10-12T14:03:00Z","apps":{"phone":{"versionCode":3,"versionName":"0.3.0","minSdk":34,"sha256":"${"0".repeat(64)}","size":10,"url":"/android/lifeos-phone-0.3.0-3.apk","previous":[]}}}""")
         val manifest = client.updateManifest()
