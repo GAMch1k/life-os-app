@@ -60,6 +60,29 @@ object WatchUpdateRules {
     /** After a push without a result (the watch is installing, or restarting), the phone waits this long before trying again. */
     val RESULT_WAIT: Duration = Duration.ofMinutes(10)
 
+    // ---- The stream's timeouts (the phone)
+
+    /**
+     * The stream is cut when the channel takes no byte for this long. A
+     * stream that still moves, however slowly, is never cut by this.
+     */
+    val STREAM_IDLE: Duration = Duration.ofMinutes(2)
+
+    /**
+     * After the last byte, how long the phone waits for the watch's verdict:
+     * Play services may still hold buffered bytes that reach the watch only
+     * now, and the watch checks the archive before it answers.
+     */
+    val STREAM_VERDICT_WAIT: Duration = Duration.ofMinutes(5)
+
+    /**
+     * The longest a whole stream may take: 20 minutes, or the time at
+     * 4 KB/s, whichever is longer. 0.4.2's fixed 15 minutes cut the 16.6 MB
+     * APK at 91 % and 95 % over a Bluetooth link of about 17 KB/s; the 6 MB
+     * APK of 0.4.3 takes about 6 minutes at that pace.
+     */
+    fun streamCap(bytes: Long): Duration = maxOf(Duration.ofMinutes(20), Duration.ofSeconds(bytes / 4_000))
+
     // ---- The watch
 
     /**
@@ -117,6 +140,12 @@ object WatchUpdateRules {
         }
         if (!watch.canUpdate) return WatchPlan.NeedsSetup("the watch app (${watch.versionName}) is older than updates through the phone")
         if (!watch.canInstallPackages) return WatchPlan.NeedsSetup("\"Install unknown apps\" is not allowed for Life OS on the watch")
+        if (!WatchAbi.runs(watch.abis)) {
+            return WatchPlan.Unusable(
+                "the watch app is built for ${WatchAbi.APK_ABIS.joinToString()} only and the watch reports ${watch.abis.joinToString()}; " +
+                    "Android would refuse it (INSTALL_FAILED_NO_MATCHING_ABIS)",
+            )
+        }
         val battery = watch.battery
         if (battery != null && !battery.charging && battery.percent < MIN_BATTERY_PERCENT) {
             return WatchPlan.Wait(release, "the watch's battery is at ${battery.percent} %; it updates once charged", now.plus(Duration.ofMinutes(30)))
@@ -169,12 +198,20 @@ object WatchUpdateRules {
 
 /**
  * The watch's ABIs (`ro.product.cpu.abilist`, read over ADB at setup, or
- * `Build.SUPPORTED_ABIS` from the watch app). Both ARM ABIs of embedded
- * Cronet are bundled today; this says which one a smaller watch APK would
- * need, so the owner can decide later.
+ * `Build.SUPPORTED_ABIS` from the watch app). Since 0.4.3 the wear APK
+ * carries embedded Cronet's native code for [APK_ABIS] only (arm64-v8a: the
+ * Galaxy Watch 8's Exynos W1000 runs a 64-bit user space); a watch that runs
+ * 32-bit ARM only would refuse it with INSTALL_FAILED_NO_MATCHING_ABIS, so the
+ * phone doesn't push it there.
  */
 object WatchAbi {
+    /** The ABIs whose native code the wear APK carries (`ndk.abiFilters` in wear/build.gradle.kts). */
+    val APK_ABIS = listOf("arm64-v8a")
+
     fun parse(abilist: String): List<String> = abilist.split(',').map { it.trim() }.filter { it.isNotEmpty() && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
+
+    /** Whether a watch reporting [abis] can install the wear APK; an empty list (not known) is given the benefit of the doubt. */
+    fun runs(abis: List<String>): Boolean = abis.isEmpty() || abis.any { it in APK_ABIS }
 
     /** The single ABI a watch-only APK would carry, or null when unknown (keep both). */
     fun smallestApkAbi(abis: List<String>): String? = when {

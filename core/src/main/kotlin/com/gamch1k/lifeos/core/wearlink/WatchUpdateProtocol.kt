@@ -17,6 +17,11 @@ import java.security.MessageDigest
 // unknown JSON keys are ignored, so later versions can add fields. Error
 // codes are strings (UpdateErrorCode), so a code this version doesn't know
 // still decodes.
+//
+// Transfer v2 (0.4.3, TransferVersion) is such an addition: `v` stays 1, the
+// offer, its reply and the transfer header gain fields with v1's meaning as
+// their defaults, and a watch that speaks v2 says so in its capabilities
+// (WearLink.WATCH_CAN_RESUME).
 
 /** Phone → watch: "which version are you, and can you take an update?" */
 @Serializable
@@ -46,6 +51,9 @@ data class WatchInfo(
     val lastUpdate: WatchUpdateResult? = null,
 ) {
     val canUpdate: Boolean get() = WearLink.WATCH_CAN_UPDATE in capabilities
+
+    /** Transfer v2: resume, and its own download over Wi-Fi (0.4.3 and later). */
+    val canResume: Boolean get() = WearLink.WATCH_CAN_RESUME in capabilities
 }
 
 @Serializable
@@ -89,6 +97,14 @@ data class ApkOffer(
     val size: Long,
     /** 64 lowercase hex digits. */
     val sha256: String,
+    /** The highest [TransferVersion] the phone speaks; absent (1) from a 0.4.0–0.4.2 phone. */
+    val transfer: Int = TransferVersion.V1,
+    /**
+     * v2: the APK's path on Life OS (`apps.wear.url` of `/android/updates`, such as
+     * `/android/lifeos-wear-0.4.3-10.apk`), so the watch may download it itself over Wi-Fi.
+     * Null: only through the phone.
+     */
+    val url: String? = null,
 )
 
 /** Watch → phone: take it (then open a channel on [WearLink.PATH_APK_TRANSFER]), or why not. */
@@ -100,7 +116,125 @@ data class ApkOfferReply(
     val error: UpdateError? = null,
     /** With [UpdateErrorCode.THROTTLED] or [UpdateErrorCode.BUSY]: when to ask again. */
     val retryAfterSeconds: Long? = null,
+    /** The [TransferVersion] both sides use; absent (1) from a 0.4.0–0.4.2 watch. */
+    val transfer: Int = TransferVersion.V1,
+    /**
+     * v2: how many bytes of this APK (this SHA-256 and size) the watch already holds from an
+     * earlier, broken attempt, written and synced; the phone's stream starts there.
+     */
+    val offset: Long = 0,
+    /**
+     * v2: the watch first tries to download the APK itself over Wi-Fi. The phone follows it on
+     * [WearLink.PATH_APK_STATUS] and streams only when the watch asks ([ApkStatusState.NEEDS_STREAM]).
+     */
+    val download: Boolean = false,
 )
+
+/**
+ * The transfer versions of the update link:
+ *
+ * - **v1** (0.4.0): the phone streams the whole APK through a channel, from the first byte;
+ *   a broken stream starts over.
+ * - **v2** (0.4.3): the watch answers an offer with the bytes it already holds (the stream
+ *   resumes there; the whole file's SHA-256 is checked at the end), may download the APK itself
+ *   over Wi-Fi first, and reports that download on [WearLink.PATH_APK_STATUS].
+ *
+ * Both sides offer the highest they speak and use the lower of the two, so a v2 phone still
+ * updates a 0.4.1 or 0.4.2 watch (v1), and a v2 watch still takes an update from a v1 phone.
+ */
+object TransferVersion {
+    const val V1 = 1
+    const val V2 = 2
+
+    /** What this app speaks. */
+    const val CURRENT = V2
+
+    /** The watch: the version it answers [offer] with. */
+    fun agreed(offer: ApkOffer): Int = minOf(offer.transfer, CURRENT).coerceAtLeast(V1)
+}
+
+/** What the phone does once the watch accepted its offer. */
+sealed interface PushPath {
+    /** Stream the APK through the channel, from [offset] on. */
+    data class Stream(val offset: Long) : PushPath
+
+    /** The watch downloads it itself; follow it on [WearLink.PATH_APK_STATUS]. It may still ask for the stream. */
+    data object WatchDownloads : PushPath
+
+    companion object {
+        /** The path [reply] (an accepted one) asks for, for an APK of [size] bytes. */
+        fun after(reply: ApkOfferReply, size: Long): PushPath = when {
+            // A v1 watch knows only the whole stream; anything else it says means nothing.
+            reply.transfer < TransferVersion.V2 -> Stream(0)
+            reply.download -> WatchDownloads
+            reply.offset in 0..size -> Stream(reply.offset)
+            else -> Stream(0)
+        }
+    }
+}
+
+/** Phone → watch (v2): "how is your download of offer [id] going?" */
+@Serializable
+data class ApkStatusRequest(
+    val v: Int = WearLink.PROTOCOL_VERSION,
+    val id: String,
+)
+
+/** Watch → phone (v2): where the accepted offer [id] stands. */
+@Serializable
+data class ApkStatus(
+    val v: Int = WearLink.PROTOCOL_VERSION,
+    val id: String,
+    /** One of [ApkStatusState]. */
+    val state: String,
+    /** One of [ApkRoute]; null before a route is chosen. */
+    val route: String? = null,
+    /** Bytes the watch holds of the APK (a resumed download counts from where it resumed). */
+    val received: Long = 0,
+    val size: Long = 0,
+    /** Measured by the watch over the last seconds; null before it knows. */
+    val bytesPerSecond: Long? = null,
+    /** With [ApkStatusState.NEEDS_STREAM]: where the phone's stream starts. */
+    val offset: Long = 0,
+    /** With [ApkStatusState.NEEDS_STREAM]: why Wi-Fi was given up; with [ApkStatusState.FAILED]: why the update failed. */
+    val error: UpdateError? = null,
+)
+
+/** The states in [ApkStatus.state]. */
+object ApkStatusState {
+    /** The watch asked Android for Wi-Fi and waits for it (up to about 45 s). */
+    const val WAITING_FOR_WIFI = "waiting_for_wifi"
+
+    /** The watch downloads the APK from Life OS over Wi-Fi. */
+    const val DOWNLOADING = "downloading"
+
+    /** Wi-Fi did not work out: the phone streams the APK from [ApkStatus.offset]. */
+    const val NEEDS_STREAM = "needs_stream"
+
+    /** The phone's stream is arriving. */
+    const val RECEIVING = "receiving"
+
+    /** The APK is whole; the watch checks it (SHA-256, package, certificate, version). */
+    const val VERIFYING = "verifying"
+
+    /** Checked and handed to PackageInstaller; the app restarts when it is done. */
+    const val INSTALLING = "installing"
+
+    /** The update failed for good ([ApkStatus.error]); the phone counts it as failed. */
+    const val FAILED = "failed"
+
+    /** The watch knows no such offer (it restarted, or the offer expired). */
+    const val UNKNOWN = "unknown"
+}
+
+/** How the APK reaches the watch, in [ApkStatus.route]. */
+object ApkRoute {
+    /** The watch downloads it from Life OS over Wi-Fi itself. */
+    const val WIFI = "wifi"
+
+    /** The phone streams it over the Data Layer (Bluetooth, or Wi-Fi when Play services chooses it). */
+    const val PHONE = "phone"
+}
 
 @Serializable
 data class UpdateError(val code: String, val message: String = "")
@@ -141,6 +275,12 @@ object UpdateErrorCode {
     /** The sender gave up, or the stream ended inside the APK. */
     const val ABORTED = "aborted"
 
+    /** v2, with [ApkStatusState.NEEDS_STREAM]: the watch got no Wi-Fi network in time. */
+    const val NO_WIFI = "no_wifi"
+
+    /** v2, with [ApkStatusState.NEEDS_STREAM]: the watch's own download failed (what arrived is kept for the stream). */
+    const val DOWNLOAD_FAILED = "download_failed"
+
     const val INTERNAL = "internal"
 }
 
@@ -177,6 +317,10 @@ object WatchUpdateCodec {
     fun decodeOffer(bytes: ByteArray) = decode(ApkOffer.serializer(), bytes) { it.v }
     fun encodeOfferReply(reply: ApkOfferReply) = encode(ApkOfferReply.serializer(), reply)
     fun decodeOfferReply(bytes: ByteArray) = decode(ApkOfferReply.serializer(), bytes) { it.v }
+    fun encodeStatusRequest(request: ApkStatusRequest) = encode(ApkStatusRequest.serializer(), request)
+    fun decodeStatusRequest(bytes: ByteArray) = decode(ApkStatusRequest.serializer(), bytes) { it.v }
+    fun encodeStatus(status: ApkStatus) = encode(ApkStatus.serializer(), status)
+    fun decodeStatus(bytes: ByteArray) = decode(ApkStatus.serializer(), bytes) { it.v }
 }
 
 /** Sent first on the transfer channel; must match the accepted [ApkOffer]. */
@@ -188,6 +332,11 @@ data class ApkTransferHeader(
     val versionCode: Long,
     val size: Long,
     val sha256: String,
+    /**
+     * v2: the first byte the chunks carry; the watch already holds the bytes before it
+     * (the [ApkOfferReply.offset] it answered). Absent (0) from a v1 phone.
+     */
+    val offset: Long = 0,
 )
 
 /** The watch's last word on the channel: the APK arrived intact (and is being installed), or why not. */
@@ -211,9 +360,11 @@ data class ApkTransferResult(
  * result          ApkTransferResult (UTF-8 JSON)
  * ```
  *
- * The chunks must add up to exactly `size` bytes with exactly `sha256`; the
- * receiver checks both as the bytes arrive, so a wrong or endless stream is
- * cut off early.
+ * The chunks carry the bytes from `offset` (v2; 0 in v1) to `size`; with the
+ * bytes the watch already held they must make exactly `size` bytes with
+ * exactly `sha256`. The receiver checks the size as the bytes arrive, so a
+ * wrong or endless stream is cut off early, and the SHA-256 of the whole file
+ * at the end.
  */
 object ApkTransferCodec {
     const val CHUNK_BYTES = 64 * 1024
@@ -225,10 +376,11 @@ object ApkTransferCodec {
     // ---- The phone's side
 
     /**
-     * Writes [header] and [header.size] bytes of [apk] in chunks of
-     * [chunkBytes], then the end mark. [onProgress] gets the bytes sent so far.
-     * When [apk] ends early, or [cancelled] turns true, it writes the abort
-     * mark and throws.
+     * Writes [header] and the bytes of [apk] from [header.offset] to
+     * [header.size] in chunks of [chunkBytes], then the end mark. [apk] must
+     * already stand at [header.offset]. [onProgress] gets the position in the
+     * APK (the offset plus the bytes sent). When [apk] ends early, or
+     * [cancelled] turns true, it writes the abort mark and throws.
      */
     fun send(
         output: OutputStream,
@@ -239,22 +391,24 @@ object ApkTransferCodec {
         onProgress: (Long) -> Unit = {},
     ) {
         require(chunkBytes in 1..MAX_CHUNK_BYTES) { "chunk size $chunkBytes" }
+        require(header.offset in 0..header.size) { "offset ${header.offset} outside the ${header.size} bytes" }
         writeJsonFrame(output, WatchUpdateCodec.encode(ApkTransferHeader.serializer(), header))
-        val buffer = ByteArray(chunkBytes)
-        var sent = 0L
+        // Length and bytes in one write: one Data Layer packet per chunk, not a 4-byte one before it.
+        val frame = ByteArray(4 + chunkBytes)
+        var sent = header.offset
         while (sent < header.size) {
             if (cancelled()) {
                 abort(output)
                 throw IOException("transfer cancelled after $sent bytes")
             }
             val wanted = minOf(chunkBytes.toLong(), header.size - sent).toInt()
-            val count = apk.read(buffer, 0, wanted)
+            val count = apk.read(frame, 4, wanted)
             if (count <= 0) {
                 abort(output)
                 throw IOException("the APK ended after $sent of ${header.size} bytes")
             }
-            writeInt(output, count)
-            output.write(buffer, 0, count)
+            ByteBuffer.wrap(frame, 0, 4).putInt(count)
+            output.write(frame, 0, 4 + count)
             sent += count
             onProgress(sent)
         }
@@ -279,20 +433,30 @@ object ApkTransferCodec {
         if (header.size <= 0) throw UpdateProtocolException(UpdateErrorCode.BAD_REQUEST, "size ${header.size}")
         if (header.size > WearLink.MAX_APK_BYTES) throw UpdateProtocolException(UpdateErrorCode.TOO_LARGE, "${header.size} bytes, at most ${WearLink.MAX_APK_BYTES}")
         if (!SHA256.matches(header.sha256)) throw UpdateProtocolException(UpdateErrorCode.BAD_REQUEST, "the SHA-256 is not 64 lowercase hex digits")
+        if (header.offset < 0 || header.offset > header.size) throw UpdateProtocolException(UpdateErrorCode.BAD_REQUEST, "offset ${header.offset} outside the ${header.size} bytes")
         return header
     }
 
     /**
      * Reads the chunks into [sink], checking them against [header] as they
      * come: at most [header.size] bytes, exactly that many at the end mark,
-     * and the announced SHA-256. Throws [UpdateProtocolException] otherwise;
-     * the caller deletes what [sink] got.
+     * and the announced SHA-256 of the whole file. With [header.offset] above
+     * 0 the receiver already holds the bytes before it: [digest] must have
+     * seen them, and [sink] gets only what follows. [onProgress] gets the
+     * position in the APK. Throws [UpdateProtocolException] otherwise; the
+     * caller decides what to keep of what [sink] got (an
+     * [UpdateErrorCode.ABORTED] stream is worth resuming).
      */
-    fun readBody(input: InputStream, header: ApkTransferHeader, sink: OutputStream, onProgress: (Long) -> Unit = {}) {
+    fun readBody(
+        input: InputStream,
+        header: ApkTransferHeader,
+        sink: OutputStream,
+        digest: MessageDigest = MessageDigest.getInstance("SHA-256"),
+        onProgress: (Long) -> Unit = {},
+    ) {
         val data = DataInputStream(input)
-        val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(CHUNK_BYTES)
-        var received = 0L
+        var received = header.offset
         try {
             while (true) {
                 val length = data.readInt()

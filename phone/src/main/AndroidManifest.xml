@@ -14,6 +14,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
 
+    <!-- Updating the watch app (P19-06, 0.4.3): the push runs in a foreground service of type
+         connectedDevice with a progress notification and a partial wake lock. Android 14+ wants the
+         type's permission and, for connectedDevice, one of a list of others: CHANGE_NETWORK_STATE
+         (a normal permission) is that one. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -65,6 +74,12 @@
                 <data android:scheme="wear" android:host="*" android:pathPrefix="/lifeos/" />
             </intent-filter>
         </service>
+
+        <!-- The push of a wear APK to the watch (docs/wear.md "Install and updates"). -->
+        <service
+            android:name=".watch.WatchUpdateService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Share → Life OS: text, links and images from any app (P18-04). -->
         <activity

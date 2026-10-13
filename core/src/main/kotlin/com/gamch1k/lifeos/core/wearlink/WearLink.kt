@@ -16,7 +16,9 @@ package com.gamch1k.lifeos.core.wearlink
  * - Updates of the watch app go through the phone (P19-06): the phone asks
  *   the watch's version ([PATH_WATCH_INFO]), offers a newer APK
  *   ([PATH_APK_OFFER]) and streams it ([PATH_APK_TRANSFER]); the watch
- *   reports the result ([PATH_WATCH_REPORT]).
+ *   reports the result ([PATH_WATCH_REPORT]). Since 0.4.3 (transfer v2) a
+ *   watch may download the APK itself over Wi-Fi while the phone follows it
+ *   ([PATH_APK_STATUS]), and a broken stream resumes where it stopped.
  *
  * See docs/wear.md.
  */
@@ -63,10 +65,24 @@ object WearLink {
     /** Phone → watch, `ChannelClient`: the accepted APK ([ApkTransferCodec]); the watch answers an [ApkTransferResult]. */
     const val PATH_APK_TRANSFER = "/lifeos/apk-transfer"
 
+    /**
+     * Phone → watch, `MessageClient.sendRequest`: an [ApkStatusRequest], answered with an
+     * [ApkStatus]: how the watch's own download of an accepted offer goes (transfer v2).
+     */
+    const val PATH_APK_STATUS = "/lifeos/apk-status"
+
     /** In [WatchInfo.capabilities]: the watch app takes APKs over [PATH_APK_OFFER] and [PATH_APK_TRANSFER] (0.4.0 and later). */
     const val WATCH_CAN_UPDATE = "apk_transfer_v1"
 
-    /** The largest APK the link carries; the wear APK is about 15 MB. */
+    /**
+     * In [WatchInfo.capabilities]: transfer v2 (0.4.3 and later). The watch answers an offer
+     * with the bytes it already holds of that APK, so a broken stream resumes; it may download
+     * the APK itself over Wi-Fi first, and answers [PATH_APK_STATUS]. The messages keep
+     * [PROTOCOL_VERSION] 1: v2 only adds fields, which a v1 side ignores.
+     */
+    const val WATCH_CAN_RESUME = "apk_transfer_v2"
+
+    /** The largest APK the link carries; the wear APK is about 6 MB since 0.4.3. */
     const val MAX_APK_BYTES = 64L * 1024 * 1024
 
     /**

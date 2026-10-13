@@ -42,7 +42,9 @@ import com.gamch1k.lifeos.phone.graph
 import com.gamch1k.lifeos.phone.update.UpdateManager
 import com.gamch1k.lifeos.phone.update.UpdateState
 import com.gamch1k.lifeos.phone.watch.WatchActivity
+import com.gamch1k.lifeos.phone.watch.WatchActivityText
 import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
+import com.gamch1k.lifeos.phone.watch.WatchUpdateService
 import com.gamch1k.lifeos.core.update.WatchAbi
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateResult
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
@@ -107,6 +109,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun updateWatchNow() {
         graph.scope.launch { graph.watchUpdates.check(WatchUpdateManager.Trigger.MANUAL) }
     }
+
+    fun cancelWatchUpdate() = WatchUpdateService.cancel(getApplication<Application>())
 
     val signingOut = MutableStateFlow(false)
 
@@ -254,35 +258,51 @@ private fun WatchSection(viewModel: SettingsViewModel, onSetUp: () -> Unit) {
         watch?.lastUpdate?.let { Text("Last update: ${describe(it)}", style = MaterialTheme.typography.bodyMedium) }
         when (val activity = status.activity) {
             WatchActivity.Idle -> Unit
-            WatchActivity.Checking -> Text("Checking…", style = MaterialTheme.typography.bodyMedium)
-            is WatchActivity.Downloading -> {
-                Text("Downloading ${activity.release.versionName} for the watch: ${(activity.fraction * 100).toInt()} %", style = MaterialTheme.typography.bodyMedium)
-                LinearProgressIndicator(progress = { activity.fraction }, modifier = Modifier.fillMaxWidth())
-            }
-            is WatchActivity.Sending -> {
-                Text("Sending ${activity.release.versionName} to the watch: ${(activity.fraction * 100).toInt()} %", style = MaterialTheme.typography.bodyMedium)
-                LinearProgressIndicator(progress = { activity.fraction }, modifier = Modifier.fillMaxWidth())
-            }
             is WatchActivity.Note -> Text(
                 activity.text,
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (activity.problem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
             )
+            else -> {
+                Text(WatchActivityText.headline(activity), style = MaterialTheme.typography.bodyMedium)
+                (activity as? WatchActivity.Sending)?.retry?.let {
+                    Text("Another try: ${it.replaceFirstChar { c -> c.lowercase() }}.", style = MaterialTheme.typography.bodySmall)
+                }
+                WatchActivityText.numbers(activity)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                val fraction = when (activity) {
+                    is WatchActivity.Downloading -> activity.progress.fraction
+                    is WatchActivity.Sending -> activity.progress?.fraction
+                    else -> null
+                }
+                if (fraction != null) {
+                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
         }
-        val busy = status.activity is WatchActivity.Checking || status.activity is WatchActivity.Downloading || status.activity is WatchActivity.Sending
+        val busy = status.activity.busy
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = viewModel::updateWatchNow, enabled = !busy) { Text("Update now") }
+            if (busy && status.activity !is WatchActivity.Checking) {
+                OutlinedButton(onClick = viewModel::cancelWatchUpdate) { Text("Cancel") }
+            } else {
+                OutlinedButton(onClick = viewModel::updateWatchNow, enabled = !busy) { Text("Update now") }
+            }
             TextButton(onClick = onSetUp, enabled = !busy) { Text("Set up the watch app") }
         }
         if (status.abis.isNotEmpty()) {
-            val smallest = WatchAbi.smallestApkAbi(status.abis)
             Text(
-                "Watch ABIs: ${status.abis.joinToString()}." + (smallest?.let { " A watch APK with only $it would do." } ?: ""),
+                "Watch ABIs: ${status.abis.joinToString()}. " +
+                    if (WatchAbi.runs(status.abis)) "The watch app carries ${WatchAbi.APK_ABIS.joinToString()} code, which this watch runs."
+                    else "The watch app carries ${WatchAbi.APK_ABIS.joinToString()} code only, which this watch can't run.",
                 style = MaterialTheme.typography.bodySmall,
+                color = if (WatchAbi.runs(status.abis)) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
             )
         }
         Text(
             "The phone sends new versions of the watch app to the watch, which installs them by itself (checked daily on Wi-Fi). " +
+                "A 0.4.3 watch first downloads them itself over Wi-Fi, which is much faster; set the watch's Wi-Fi to Auto and save your network on it. " +
+                "Otherwise they go through the phone over Bluetooth, and a broken transfer resumes. " +
                 "\"Set up the watch app\" installs it the first time, or again after a reset, over Wireless debugging.",
             style = MaterialTheme.typography.bodySmall,
         )
