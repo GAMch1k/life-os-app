@@ -46,6 +46,15 @@ data class PushPayload(
     /** The Task this notification is about, when its link names one: it gets a Done action. */
     val taskId: String? get() = PushPayloads.taskIdFromLink(link)
 
+    /**
+     * Whether it gets Snooze (P18-05): reminders, Tasks, events, Human Review
+     * and every other kind, but not the summaries, which are read and done
+     * with: `summary.morning` (the daily summary) and `finance.budget.summary`
+     * (the month's). Any category below `summary` or ending in `.summary` counts.
+     */
+    val snoozable: Boolean
+        get() = category.trim().lowercase().let { it != "summary" && !it.startsWith("summary.") && !it.endsWith(".summary") }
+
     /** Tasks or events changed (or are due): the watch's Today tile and the widgets refresh. */
     val touchesToday: Boolean get() = category.startsWith("tasks.") || category.startsWith("calendar.") || category.startsWith("summary.")
 }

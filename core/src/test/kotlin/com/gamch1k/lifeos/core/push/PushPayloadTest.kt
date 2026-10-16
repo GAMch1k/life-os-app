@@ -73,4 +73,14 @@ class PushPayloadTest {
         assertNull(PushPayloads.taskIdFromLink("::::"))
         assertEquals(id, PushPayloads.parse("""{"title":"Pay rent","link":"/tasks?task=$id","category":"tasks.due"}""".toByteArray())!!.taskId)
     }
+
+    @Test
+    fun `every notification gets Snooze but the summaries`() {
+        fun snoozable(category: String) = PushPayload(title = "x", category = category).snoozable
+        listOf(
+            "calendar.reminder", "tasks.due", "tasks.morning", "tasks.evening", "inbox.human_review", "inbox.failed",
+            "food.expiry", "finance.subscription", "finance.large_debit", "status.processing", "test.push", "", "summaryish.thing",
+        ).forEach { assertTrue(it, snoozable(it)) }
+        listOf("summary.morning", "summary.evening", "Summary.Morning", "finance.budget.summary", "summary").forEach { assertFalse(it, snoozable(it)) }
+    }
 }
