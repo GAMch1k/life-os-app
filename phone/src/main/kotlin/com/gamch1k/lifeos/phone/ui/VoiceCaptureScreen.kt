@@ -2,11 +2,13 @@ package com.gamch1k.lifeos.phone.ui
 
 import android.Manifest
 import android.app.Application
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -37,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -105,8 +109,11 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         state.value = if (duration == null) VoiceState.Error("Nothing was recorded.") else VoiceState.Stopped(duration, why)
     }
 
-    /** Stop (if needed) and queue; returns false when there is nothing to send. */
-    fun send(): Boolean {
+    /**
+     * Stop (if needed) and queue; [announce] gets "Voice note (0:12) queued
+     * for the Inbox" once it is. Returns false when there is nothing to send.
+     */
+    fun send(announce: suspend (String) -> Unit): Boolean {
         val duration = when (val current = state.value) {
             is VoiceState.Stopped -> current.durationMillis
             VoiceState.Recording -> recorder.stop(file)
@@ -119,7 +126,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         sent = true
         graph.scope.launch {
             graph.queue.add(id, CaptureKind.VOICE, files = listOf(file), durationMillis = duration)
-            graph.notices.send("Voice note (${CaptureStatusText.duration(duration)}) queued for the Inbox")
+            announce("Voice note (${CaptureStatusText.duration(duration)}) queued for the Inbox")
         }
         return true
     }
@@ -134,9 +141,15 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+/**
+ * Records at once. [onClose] leaves the screen (after Send, Cancel or a
+ * discard); [announce] tells that the note was queued. Hosted by the app
+ * (Home's Voice) and by [VoiceCaptureActivity] (the side key, P18-12).
+ */
 @Composable
-fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewModel()) {
+fun VoiceCaptureScreen(onClose: () -> Unit, announce: suspend (String) -> Unit, viewModel: VoiceViewModel = viewModel()) {
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var confirmDiscard by remember { mutableStateOf(false) }
     var elapsed by remember { mutableLongStateOf(0L) }
@@ -148,9 +161,28 @@ fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewMod
     LaunchedEffect(Unit) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             viewModel.start()
+            return@LaunchedEffect
+        }
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        if (activity != null && keyguard?.isKeyguardLocked == true) {
+            // Over the lock screen (the side key): the permission dialog comes after the unlock.
+            keyguard.requestDismissKeyguard(
+                activity,
+                object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() = permission.launch(Manifest.permission.RECORD_AUDIO)
+                    override fun onDismissCancelled() = viewModel.permissionDenied()
+                    override fun onDismissError() = viewModel.permissionDenied()
+                },
+            )
         } else {
             permission.launch(Manifest.permission.RECORD_AUDIO)
         }
+    }
+    // The screen stays on while recording: when it goes off, the activity stops, and so does the recording.
+    val view = LocalView.current
+    DisposableEffect(view, state == VoiceState.Recording) {
+        view.keepScreenOn = state == VoiceState.Recording
+        onDispose { view.keepScreenOn = false }
     }
     LaunchedEffect(state) {
         while (state == VoiceState.Recording) {
@@ -171,7 +203,7 @@ fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewMod
     }
     BackHandler(enabled = state == VoiceState.Recording || state is VoiceState.Stopped) { confirmDiscard = true }
 
-    Scaffold(topBar = { BackTopBar("Voice", onBack = { confirmDiscard = state == VoiceState.Recording || state is VoiceState.Stopped; if (!confirmDiscard) navigator.back() }) }) { padding ->
+    Scaffold(topBar = { BackTopBar("Voice", onBack = { confirmDiscard = state == VoiceState.Recording || state is VoiceState.Stopped; if (!confirmDiscard) onClose() }) }) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -204,14 +236,14 @@ fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewMod
             Spacer(Modifier.weight(1f))
             val canSend = state == VoiceState.Recording || state is VoiceState.Stopped
             Button(
-                onClick = { if (viewModel.send()) navigator.back() },
+                onClick = { if (viewModel.send(announce)) onClose() },
                 enabled = canSend,
                 modifier = Modifier.fillMaxWidth().height(64.dp),
             ) { Text(if (state == VoiceState.Recording) "Stop and send" else "Send", style = MaterialTheme.typography.titleMedium) }
             OutlinedButton(
                 onClick = {
                     viewModel.discard()
-                    navigator.back()
+                    onClose()
                 },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             ) { Text(if (canSend) "Cancel" else "Close") }
@@ -226,7 +258,7 @@ fun VoiceCaptureScreen(navigator: Navigator, viewModel: VoiceViewModel = viewMod
                 TextButton(onClick = {
                     confirmDiscard = false
                     viewModel.discard()
-                    navigator.back()
+                    onClose()
                 }) { Text("Discard") }
             },
             dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep") } },

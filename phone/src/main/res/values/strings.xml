@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">Life OS</string>
     <string name="share_label">Life OS Inbox</string>
+    <string name="capture_launcher">Life OS Capture</string>
     <string name="widget_today_name">Life OS Today</string>
     <string name="widget_today_description">Tasks due and the next events</string>
     <string name="widget_capture_name">Life OS Capture</string>

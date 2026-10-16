@@ -181,6 +181,17 @@ The steps, the protocol and the failure modes are in [docs/wear.md](docs/wear.md
   - **BUG-41** (fixed in 0.4.3): the Capture widget sometimes showed Today, and kept it. Glance finds a widget's ids by its `GlanceAppWidget`'s class name, and R8 had merged `QuickCaptureWidget` into `TodayWidget`, so every Today refresh drew Today into the Capture widgets as well; Capture is drawn only when the system asks (placing it, a reboot, an app update), so it stayed until then. Now `proguard-rules.pro` keeps every `GlanceAppWidget` class, the release build fails if R8's mapping shows them renamed or merged, each widget renders only into the ids the system lists for its own receiver, and the Capture widgets are drawn again whenever the app opens.
 - **Voice idempotency** (BUG-40): every voice upload sends its job attempt's `Idempotency-Key` and the `sourceMetadata` JSON stored once for that attempt, so a retry is answered with the same job; 409 `idempotency_conflict` fails the capture with a clear message. Since 0.3.1, Retry after a failed transcription or a 409 starts a new job attempt with a new key, on the phone and the watch.
 
+### Life OS Capture and the side key (P18-12, 0.4.3)
+
+The phone app has a second entry in the app list, **Life OS Capture** (a microphone on the Life OS blue; `phone/…/ui/VoiceCaptureActivity.kt`). It opens straight into Home's Voice screen and starts recording at once; **Stop and send** queues the note, **Cancel** discards it.
+
+- **Over the lock screen**: it shows over the lock screen and turns the screen on, and shows only the recording there. Send, Cancel and Back close it, back to the lock screen; it opens nothing else, so the rest of the app stays behind the unlock. It runs in a task of its own, out of Recents.
+- **Sending** works with the phone locked: the note goes into the queue like any other (`Voice note (0:12) queued for the Inbox` as a toast) and is sent when there is a network.
+- The screen stays on while it records. If it goes off anyway (the side key), the recording stops and is kept; the next launch shows it with Send and Cancel.
+- **Microphone**: the first time, Android asks for it; over the lock screen, the unlock comes first, then the question.
+
+**Double press of the side key** (Samsung One UI): Settings › Advanced features › **Side button** › turn on **Double press** › **Open app** › choose **Life OS Capture**. Pressing the side key twice then records, from the lock screen too. If One UI asks for the unlock before it opens the app, that is One UI's rule for the side key; Life OS Capture itself can show over the lock screen.
+
 ## Installing
 
 The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes.
