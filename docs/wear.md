@@ -166,13 +166,14 @@ Long-press a capture on Home to delete it.
 
 The phone app's notifications reach the watch by Android's own bridging. The watch app posts nothing for Life OS items, so nothing shows twice; its manifest keeps bridging on explicitly (`com.google.android.wearable.notificationBridgeMode` = `BRIDGING`). The only notification the watch app posts is its own "Recording" notice while it records, which stays on the watch.
 
-What the phone app (P18-05) should set on each Life OS notification:
+What the phone app (P18-05) sets on each Life OS notification (`phone/…/push/LifeOsNotifications.kt`):
 
 - **Don't** call `setLocalOnly(true)`: that stops bridging. Use it only for the phone's own technical notifications (update downloads, foreground services).
 - **Dismissal id**: `NotificationCompat.WearableExtender().setDismissalId("lifeos:<notification id>")`, with the Life OS notification id, so dismissing it on either device dismisses it on both.
 - **Bridge tag**: `WearableExtender().setBridgeTag("lifeos.<category>")`, for example `lifeos.tasks.due` or `lifeos.calendar.reminder`. Nothing is excluded today; if the watch app ever posts its own notification for a category, it can exclude that tag with `BridgingManager` and `BridgingConfig.addExcludedTags` instead of showing it twice.
-- **Done and Snooze** as normal actions (`addAction`) whose `PendingIntent`s run on the phone, such as a broadcast receiver. Bridged actions run on the phone, which has the token and the ECH-capable client. The content intent (open the app) works only on the phone.
-- After Done or Snooze, call `WearLinkPhone.notifyTodayChanged(context)`, so the Today tile drops the task at once.
+- **Done and Snooze** as normal actions (`addAction`) whose `PendingIntent`s are broadcasts to the phone's `NotificationActionReceiver`, marked as opening nothing (`setShowsUserInterface(false)`). Bridged actions run on the phone, which has the token and the ECH-capable client. Done is on notifications about a Task; Snooze (0.4.4) on every one but the summaries ([README](../README.md#share-push-widgets-030)). The content intent (open the app) works only on the phone.
+- **Done** cancels the phone's notification at once, which removes the watch's copy, and the Done job calls `WearLinkPhone.notifyTodayChanged(context)` once the Task is completed, so the Today tile drops it.
+- **Snooze** cancels the phone's notification the same way, so the watch's copy goes with it; the notification that comes back later (same payload, tag, dismissal id and actions, "Snoozed" as its sub-text) is bridged again like a new one. Snooze changes nothing in Life OS, so it pings nothing.
 - Group related notifications (`setGroup` plus a summary), so the watch shows one stack.
 
 ## What the phone app implements
@@ -186,7 +187,7 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
    - don't follow redirects, and return every HTTP response, whatever its status;
    - throw `WearRelayException(RelayErrorCode.NO_CREDENTIALS)` without a token and `WearRelayException(RelayErrorCode.UPSTREAM_UNREACHABLE)` when no response came (any other exception counts as unreachable too);
    - it runs on a background thread; the watch waits about 30 seconds for small requests and 2 minutes for uploads.
-4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, Done or Snooze). Both are no-ops without a watch.
+4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, a Done). Both are no-ops without a watch.
 
 **The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over the phone's token through `ServiceTokenStore` (a read-only view of the token store, which holds the token entered at the phone app's first run or under Settings → **Change token**) and relay nothing (`WearRelay.UNAVAILABLE`).
 
@@ -294,6 +295,7 @@ Since 0.4.3 the wear APK carries embedded Cronet only for `arm64-v8a` (`ndk.abiF
 ## Tests and build
 
 - `tools/build test` runs every module's unit tests, including:
+  - `core/…/push/`: the push payload (fields, Task links, which notifications get Snooze) and Snooze (`SnoozeTest`: the alarm at the earliest snooze and moving on, the lengths, nothing early, several due together, snoozing again, Done by tag and by Task, Home's completion, shown before forgotten, the store outliving the process and a reboot, late ones after a force stop, sign-out, a damaged store; "tomorrow at 09:00" across both DST changes in Berlin, in New York, Sydney, Kolkata, Kiritimati and UTC, after midnight, in a DST gap and overlap, and every 47 minutes of 2026 in six zones);
   - `core/…/wearlink/`: the frame codec (round trips, limits, truncation, versions, wire names), the relay policy, the phone's handler (credentials, relayed reads and writes, error codes, the channel, too-large replies, the replay cache, which replays successes only);
   - `core/…/capture/`: the phone's queue, including Retry: a new job attempt after a failed Voice job or a 409, the same key otherwise;
   - `wear/…/net/`: the watch's relay against the phone's real handler, end to end, and the routing rules;
@@ -306,4 +308,4 @@ Since 0.4.3 the wear APK carries embedded Cronet only for `arm64-v8a` (`ndk.abiF
   - `core/…/watchsetup/`: the bootstrap's state machine with ADB faked (the whole run, a failed download, typos, no Wi-Fi, wrong code, an expired pairing, the wrong network, no mDNS, a changed port, a lost pairing, a rescue without pairing, a refused install and Try again, a newer version on the watch, a refused permission, optional steps, a broken connection, a watch app that answers late), and the parsing of addresses, codes, the subnet and the shell's answers.
 - `tools/build` builds the signed `lifeos-wear-<version>.apk` (about 6.6 MB since 0.4.3: embedded Cronet for `arm64-v8a` only, native code and dex compressed; 0.4.2's was 16.6 MB).
 
-Not tested automatically: the Data Layer between the real phone and watch, recording on the watch's microphone, the tile and complication rendering, and everything of P19-06 that needs the devices: pairing and installing over the watch's Wireless debugging (libadb-android against One UI Watch's adbd), mDNS discovery, `appops` on One UI Watch, a channel transfer over Bluetooth (0.4.2's 16.6 MB broke at 91 % and 95 %; 0.4.3's 6.6 MB and its resume are untested on the devices), the watch's Wi-Fi request and the network-bound download, whether One UI Watch lets the update's foreground services start from the Data Layer's callbacks, and whether the silent self-update really stays silent on the Galaxy Watch 8. P19-05 is the acceptance on the watch.
+Not tested automatically: the Data Layer between the real phone and watch, Done and Snooze tapped on the watch's bridged notification (P18-05), the snooze alarm's timing in Doze, recording on the watch's microphone, the tile and complication rendering, and everything of P19-06 that needs the devices: pairing and installing over the watch's Wireless debugging (libadb-android against One UI Watch's adbd), mDNS discovery, `appops` on One UI Watch, a channel transfer over Bluetooth (0.4.2's 16.6 MB broke at 91 % and 95 %; 0.4.3's 6.6 MB and its resume are untested on the devices), the watch's Wi-Fi request and the network-bound download, whether One UI Watch lets the update's foreground services start from the Data Layer's callbacks, and whether the silent self-update really stays silent on the Galaxy Watch 8. P19-05 is the acceptance on the watch.
