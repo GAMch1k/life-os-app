@@ -37,6 +37,8 @@ class LifeOsApp : Application(), WearLinkHost {
             graph.captures.pruneSent(Instant.now(), Duration.ofDays(7))
             graph.queue.pruneOrphans()
         }
+        // Snoozed notifications: late ones (after a force stop) come back, the alarm is set again.
+        graph.scope.launch { graph.snoozes.wake() }
     }
 }
 

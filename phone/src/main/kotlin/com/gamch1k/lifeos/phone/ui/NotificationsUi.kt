@@ -9,11 +9,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,11 +26,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.gamch1k.lifeos.core.push.SnoozeLength
 import com.gamch1k.lifeos.phone.graph
 import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.push.PushState
@@ -66,7 +73,7 @@ fun NotificationPrompt() {
     }
 }
 
-/** Settings › Notifications: permission, the push subscription, the channels. */
+/** Settings › Notifications: permission, the push subscription, the channels, the snooze length. */
 @Composable
 fun NotificationsSection() {
     val context = LocalContext.current
@@ -92,7 +99,40 @@ fun NotificationsSection() {
                 "Urgent, Reminders and Information are separate channels; the watch mirrors them.",
             style = MaterialTheme.typography.bodySmall,
         )
+        SnoozeChoice()
     }
+}
+
+/** How long Snooze puts a notification away (P18-05). */
+@Composable
+private fun SnoozeChoice() {
+    val graph = LocalContext.current.graph
+    val chosen by graph.snoozes.length.collectAsState(initial = null)
+    Text("Snooze for", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+    Column(Modifier.selectableGroup()) {
+        SnoozeLength.entries.forEach { length ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .selectable(
+                        selected = length == chosen,
+                        onClick = { graph.scope.launch { graph.snoozes.setLength(length) } },
+                        role = Role.RadioButton,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = length == chosen, onClick = null)
+                Text(length.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 12.dp))
+            }
+        }
+    }
+    Text(
+        "Snooze, on the phone or the watch, puts a notification away and shows it again after this long, marked \"Snoozed\". " +
+            "Every notification has it but the summaries. \"Tomorrow at 09:00\" is in this phone's time; " +
+            "before 05:00 it means the coming morning.",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 private fun pushText(state: PushState): String = when (state) {

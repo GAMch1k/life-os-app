@@ -21,12 +21,16 @@ import com.gamch1k.lifeos.core.capture.CaptureSender
 import com.gamch1k.lifeos.core.capture.CaptureStatusChecker
 import com.gamch1k.lifeos.core.capture.CaptureStore
 import com.gamch1k.lifeos.core.capture.asCaptureApi
+import com.gamch1k.lifeos.core.push.SnoozeBook
+import com.gamch1k.lifeos.core.push.Snoozer
 import com.gamch1k.lifeos.core.secrets.KeystoreCipher
 import com.gamch1k.lifeos.core.secrets.TokenStore
 import com.gamch1k.lifeos.core.today.TodaySnapshot
 import com.gamch1k.lifeos.core.wearlink.PhoneWearLinkHost
 import com.gamch1k.lifeos.core.wearlink.WearLinkPhone
 import com.gamch1k.lifeos.phone.capture.CaptureQueue
+import com.gamch1k.lifeos.phone.push.AndroidSnoozeAlarm
+import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.push.PushManager
 import com.gamch1k.lifeos.phone.today.TodayRepository
 import com.gamch1k.lifeos.phone.today.TodayWidget
@@ -84,6 +88,13 @@ class AppGraph(private val app: Application) {
     val wearLink = PhoneWearLinkHost(tokens, client)
 
     val push = PushManager(app, client, settings, scope)
+
+    /** Snooze on notifications (P18-05): the length, the snoozed ones (in settings), one alarm. */
+    val snoozes = Snoozer(
+        book = SnoozeBook(settings),
+        alarm = AndroidSnoozeAlarm(app),
+        repost = { payload -> LifeOsNotifications.show(app, payload, snoozed = true) },
+    )
 
     private val foregroundState = MutableStateFlow(false)
 
@@ -150,7 +161,8 @@ class AppGraph(private val app: Application) {
     /**
      * Sign out: Life OS forgets this phone's push subscription (while the token
      * still works), then the token, the cached Today, the queue with its
-     * files and downloaded updates (the phone's and the watch's) go; the watch
+     * files, snoozed notifications and downloaded updates (the phone's and the
+     * watch's) go; the watch
      * and the widgets hear of it. The watch's pairing key stays: it is no
      * Life OS credential, and a later rescue may need it.
      */
@@ -159,6 +171,7 @@ class AppGraph(private val app: Application) {
         tokens.clear()
         today.clear()
         queue.clear()
+        snoozes.clear()
         updates.forget()
         watchUpdates.forget()
         credentialsChanged()

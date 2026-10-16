@@ -13,6 +13,9 @@
     <!-- Push notifications (P18-05): showing them, and receiving FCM through Play services. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
+    <!-- Snooze (P18-05): snoozed notifications come back after a reboot. WorkManager's manifest
+         already brings this permission, so the APK asks for nothing new. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Updating the watch app (P19-06, 0.4.3): the push runs in a foreground service of type
          connectedDevice with a progress notification and a partial wake lock. Android 14+ wants the
@@ -117,10 +120,26 @@
             </intent-filter>
         </service>
 
-        <!-- A notification's Done. -->
+        <!-- A notification's Done and Snooze, from the phone or the watch. -->
         <receiver
             android:name=".push.NotificationActionReceiver"
             android:exported="false" />
+
+        <!-- Snooze's alarm: snoozed notifications come back (P18-05). -->
+        <receiver
+            android:name=".push.SnoozeAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Snooze after a reboot or an update: enabled by the app only while something is snoozed. -->
+        <receiver
+            android:name=".push.SnoozeRestoreReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- "Life OS Capture" in the app list (P18-12): straight into a voice recording, over the lock
              screen too; for the side key's double press (README). Its own task, out of Recents. -->
