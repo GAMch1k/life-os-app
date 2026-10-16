@@ -1,8 +1,11 @@
 package com.gamch1k.lifeos.phone.today
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -16,12 +19,12 @@ import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.provideContent
-import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
@@ -41,6 +44,7 @@ import com.gamch1k.lifeos.core.today.TodayView
 import com.gamch1k.lifeos.phone.MainActivity
 import com.gamch1k.lifeos.phone.R
 import com.gamch1k.lifeos.phone.graph
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.ZoneId
@@ -69,15 +73,38 @@ class TodayWidget : GlanceAppWidget() {
     }
 
     companion object {
-        /** Re-renders every Today widget from the cache. */
-        suspend fun refreshAll(context: Context) {
-            runCatching { TodayWidget().updateAll(context) }
-        }
+        /** Re-renders every Today widget from the cache, and no other widget (BUG-41). */
+        suspend fun refreshAll(context: Context) = renderAll(context, TodayWidgetReceiver::class.java, TodayWidget())
     }
 }
 
 class TodayWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = TodayWidget()
+}
+
+/**
+ * Renders [widget] into the widgets placed from [receiver], and only into
+ * those (BUG-41). The ids come from the system's list for the receiver, not
+ * from Glance's `updateAll`, which finds them by the [GlanceAppWidget]'s class
+ * name: R8 had merged [QuickCaptureWidget] into [TodayWidget] (one class, told
+ * apart by a synthetic field), that one name covered both receivers, and every
+ * Today refresh drew Today into the Capture widgets too. The classes are kept
+ * now (proguard-rules.pro), and `tools/build` checks R8's mapping for it.
+ */
+private suspend fun renderAll(context: Context, receiver: Class<out GlanceAppWidgetReceiver>, widget: GlanceAppWidget) {
+    val glance = GlanceAppWidgetManager(context)
+    val ids = runCatching { AppWidgetManager.getInstance(context).getAppWidgetIds(ComponentName(context, receiver)) }
+        .getOrElse { IntArray(0) }
+    for (id in ids) {
+        try {
+            widget.update(context, glance.getGlanceIdBy(id))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // Removed meanwhile, or Glance failed; the next refresh tries again.
+            Log.w("LifeOsWidgets", "could not render widget $id of ${receiver.simpleName}", failure)
+        }
+    }
 }
 
 private val time = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)
@@ -178,7 +205,12 @@ object CaptureLinks {
         .addFlags(FLAGS)
 }
 
-/** The quick-capture widget: Voice, Photo and Text, each straight into its screen. */
+/**
+ * The quick-capture widget: Voice, Photo and Text, each straight into its
+ * screen. Its content never changes, so it is drawn only when the system
+ * asks (placing it, a reboot, an app update) and when the app opens, which
+ * also heals an instance that shows something else (BUG-41).
+ */
 class QuickCaptureWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
@@ -199,6 +231,11 @@ class QuickCaptureWidget : GlanceAppWidget() {
                 }
             }
         }
+    }
+
+    companion object {
+        /** Draws every Capture widget again, and no other widget. */
+        suspend fun refreshAll(context: Context) = renderAll(context, QuickCaptureWidgetReceiver::class.java, QuickCaptureWidget())
     }
 }
 
