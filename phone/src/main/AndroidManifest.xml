@@ -122,6 +122,23 @@
             android:name=".push.NotificationActionReceiver"
             android:exported="false" />
 
+        <!-- "Life OS Capture" in the app list (P18-12): straight into a voice recording, over the lock
+             screen too; for the side key's double press (README). Its own task, out of Recents. -->
+        <activity
+            android:name=".ui.VoiceCaptureActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode|fontScale|locale|layoutDirection"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_capture"
+            android:label="@string/capture_launcher"
+            android:launchMode="singleTask"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- Home-screen widgets (P18-07). -->
         <receiver
             android:name=".today.TodayWidgetReceiver"

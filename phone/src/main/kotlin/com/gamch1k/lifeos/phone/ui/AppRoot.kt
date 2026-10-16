@@ -10,11 +10,13 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.gamch1k.lifeos.phone.NetworkCheckScreen
+import com.gamch1k.lifeos.phone.graph
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** The app's screens. */
@@ -90,6 +92,7 @@ fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = Mutabl
         mutableStateListOf<Screen>(if (startSignedIn) Screen.Home else Screen.Onboarding(firstRun = true))
     }
     val navigator = remember { Navigator(stack) }
+    val graph = LocalContext.current.graph
     // A widget's capture button: open its screen on top of Home (once signed in).
     val launch by launches.collectAsState()
     LaunchedEffect(launch) {
@@ -108,7 +111,7 @@ fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = Mutabl
             entry<Screen.Onboarding> { OnboardingScreen(navigator, firstRun = it.firstRun) }
             entry<Screen.Home> { HomeScreen(navigator) }
             entry<Screen.TextCapture> { TextCaptureScreen(navigator) }
-            entry<Screen.VoiceCapture> { VoiceCaptureScreen(navigator) }
+            entry<Screen.VoiceCapture> { VoiceCaptureScreen(onClose = navigator::back, announce = { graph.notices.send(it) }) }
             entry<Screen.PhotoCapture> { PhotoCaptureScreen(navigator, camera = it.camera) }
             entry<Screen.Queue> { QueueScreen(navigator) }
             entry<Screen.Settings> { SettingsScreen(navigator) }

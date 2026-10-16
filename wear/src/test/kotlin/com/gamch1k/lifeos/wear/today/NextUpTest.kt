@@ -7,7 +7,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -78,12 +77,10 @@ class NextUpTest {
     fun `each type shows an event`() {
         val description = "Next: Dentist at 14:30"
         val highlight = "event:e1"
-        assertEquals(NextFace("14:30", "Dentist", description, NextIcon.EVENT, highlight, value = 40f), NextUp.face(NextKind.SHORT_TEXT, dentist, 40))
-        assertEquals(NextFace("14:30 Dentist", "Next", description, NextIcon.EVENT, highlight), NextUp.face(NextKind.LONG_TEXT, dentist, 40))
-        assertEquals(NextFace("14:30", "Dentist", description, NextIcon.EVENT, highlight, value = 40f, max = 60f), NextUp.face(NextKind.RANGED_VALUE, dentist, 40))
-        assertEquals(NextFace("14:30", "Dentist", description, NextIcon.EVENT, highlight, value = 40f, max = 60f), NextUp.face(NextKind.GOAL_PROGRESS, dentist, 40))
-        assertEquals(NextFace(null, null, description, NextIcon.EVENT, highlight), NextUp.face(NextKind.MONOCHROMATIC_IMAGE, dentist, 40))
-        assertEquals(NextFace(null, null, description, NextIcon.EVENT, highlight), NextUp.face(NextKind.SMALL_IMAGE, dentist, 40))
+        assertEquals(NextFace("14:30", "Dentist", description, NextIcon.EVENT, highlight), NextUp.face(NextKind.SHORT_TEXT, dentist))
+        assertEquals(NextFace("14:30 Dentist", "Next", description, NextIcon.EVENT, highlight), NextUp.face(NextKind.LONG_TEXT, dentist))
+        assertEquals(NextFace(null, null, description, NextIcon.EVENT, highlight), NextUp.face(NextKind.MONOCHROMATIC_IMAGE, dentist))
+        assertEquals(NextFace(null, null, description, NextIcon.EVENT, highlight), NextUp.face(NextKind.SMALL_IMAGE, dentist))
     }
 
     @Test
@@ -93,11 +90,10 @@ class NextUpTest {
         assertEquals("Tue Flight", NextUp.face(NextKind.SHORT_TEXT, flight).title)
         assertEquals("Tue 08:00 Flight", NextUp.face(NextKind.LONG_TEXT, flight).text)
         assertEquals("Tomorrow", NextUp.face(NextKind.LONG_TEXT, flight).title)
-        assertEquals("Next: Flight at Tue 08:00", NextUp.face(NextKind.RANGED_VALUE, flight).description)
+        assertEquals("Next: Flight at Tue 08:00", NextUp.face(NextKind.MONOCHROMATIC_IMAGE, flight).description)
 
         val long = dentist.copy(title = "Quarterly planning with the whole team and the board")
         assertEquals("Quarterly…", NextUp.face(NextKind.SHORT_TEXT, long).title)
-        assertEquals("Quarterly…", NextUp.face(NextKind.RANGED_VALUE, long).title)
         val longText = NextUp.face(NextKind.LONG_TEXT, long).text!!
         assertEquals(NextUp.LONG_TEXT, longText.length)
         assertTrue(longText.startsWith("14:30 Quarterly planning") && longText.endsWith("…"))
@@ -106,13 +102,11 @@ class NextUpTest {
     }
 
     @Test
-    fun `each type shows a task, full arc and a check`() {
+    fun `each type shows a task with a check`() {
         val overdue = NextItem.Task("t1", "Pay rent", "Overdue", overdue = true)
         val highlight = "task:t1"
-        assertEquals(NextFace("Overdue", "Pay rent", "Pay rent, overdue", NextIcon.TASK, highlight, value = 60f), NextUp.face(NextKind.SHORT_TEXT, overdue, 60))
-        assertEquals(NextFace("Pay rent", "Overdue", "Pay rent, overdue", NextIcon.TASK, highlight), NextUp.face(NextKind.LONG_TEXT, overdue, 60))
-        assertEquals(60f, NextUp.face(NextKind.RANGED_VALUE, overdue, NextUp.progress(overdue, now)).value)
-        assertEquals(60f, NextUp.face(NextKind.GOAL_PROGRESS, overdue, NextUp.progress(overdue, now)).value)
+        assertEquals(NextFace("Overdue", "Pay rent", "Pay rent, overdue", NextIcon.TASK, highlight), NextUp.face(NextKind.SHORT_TEXT, overdue))
+        assertEquals(NextFace("Pay rent", "Overdue", "Pay rent, overdue", NextIcon.TASK, highlight), NextUp.face(NextKind.LONG_TEXT, overdue))
         assertEquals(NextIcon.TASK, NextUp.face(NextKind.MONOCHROMATIC_IMAGE, overdue).icon)
         assertEquals(NextIcon.TASK, NextUp.face(NextKind.SMALL_IMAGE, overdue).icon)
 
@@ -124,33 +118,15 @@ class NextUpTest {
 
     @Test
     fun `each type shows nothing ahead as a microphone that records`() {
-        val faces = NextKind.entries.associateWith { NextUp.face(it, NextItem.Free, NextUp.progress(NextItem.Free, now)) }
+        val faces = NextKind.entries.associateWith { NextUp.face(it, NextItem.Free) }
         faces.values.forEach { face ->
             assertEquals(NextIcon.MIC, face.icon)
             assertNull("a microphone records", face.highlight)
-            assertEquals(0f, face.value)
         }
         assertEquals("Free", faces.getValue(NextKind.SHORT_TEXT).text)
         assertEquals("Nothing ahead", faces.getValue(NextKind.LONG_TEXT).text)
-        assertNull(faces.getValue(NextKind.RANGED_VALUE).text)
-        assertNull(faces.getValue(NextKind.GOAL_PROGRESS).text)
-    }
-
-    @Test
-    fun `the arc fills in 5-minute steps over the hour before the event`() {
-        val start = dentist.start
-        fun at(minutesBefore: Long, secondsBefore: Long = 0) = NextUp.progress(dentist, start.minus(Duration.ofMinutes(minutesBefore)).minusSeconds(secondsBefore))
-        assertEquals(0, at(90))
-        assertEquals(0, at(60, 1))
-        assertEquals(5, at(60))
-        assertEquals(5, at(55, 1))
-        assertEquals(10, at(55))
-        assertEquals(35, at(30))
-        assertEquals(55, at(5, 1))
-        assertEquals(60, at(5))
-        assertEquals(60, at(0, 1))
-        assertEquals(60, NextUp.progress(dentist, start))
-        assertTrue(NextKind.RANGED_VALUE.fills && NextKind.GOAL_PROGRESS.fills && !NextKind.SHORT_TEXT.fills)
+        assertNull(faces.getValue(NextKind.MONOCHROMATIC_IMAGE).text)
+        assertNull(faces.getValue(NextKind.SMALL_IMAGE).text)
     }
 
     @Test
@@ -161,9 +137,8 @@ class NextUpTest {
         plan.slices.zipWithNext { a, b -> assertEquals(a.until, b.from) }
         assertEquals(Instant.parse("2026-10-13T06:00:00Z"), plan.slices.last().until)
         assertEquals(NextItem.Task("t1", "Pay rent", "Overdue", overdue = true), plan.default)
-        assertEquals(60, plan.defaultProgress)
 
-        fun shown(at: String) = NextUp.select(plan, Instant.parse(at)).first
+        fun shown(at: String) = NextUp.select(plan, Instant.parse(at))
         assertEquals("Dentist", (shown("2026-10-12T12:29:59Z") as NextItem.Event).title)
         assertEquals("Dinner", (shown("2026-10-12T12:30:00Z") as NextItem.Event).title)
         assertEquals("Flight", (shown("2026-10-12T17:00:00Z") as NextItem.Event).title)
@@ -171,25 +146,13 @@ class NextUpTest {
     }
 
     @Test
-    fun `the value types step every 5 minutes in the last hour`() {
+    fun `one event is one slice until it starts, then the default`() {
         val onlyDentist = snapshot(events = listOf(timed("e1", "Dentist", "2026-10-12T12:30:00Z", "2026-10-12T13:30:00Z")))
-        val plan = NextUp.plan(onlyDentist, now, berlin, steps = true)
-        assertEquals(13, plan.slices.size)
-        assertEquals(Instant.parse("2026-10-12T11:30:00Z"), plan.slices[0].until)
-        assertEquals(listOf(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60), plan.slices.map { it.progress })
-        plan.slices.forEach { assertEquals(NextUp.progress(it.item, it.from), it.progress) }
-        plan.slices.zipWithNext { a, b -> assertEquals(a.until, b.from) }
+        val plan = NextUp.plan(onlyDentist, now, berlin)
+        assertEquals(listOf(NextSlice(now, dentist.start, dentist)), plan.slices)
         assertEquals(NextItem.Free, plan.default)
-        assertEquals(20, NextUp.select(plan, Instant.parse("2026-10-12T11:47:00Z")).second)
-        assertEquals(60, NextUp.select(plan, Instant.parse("2026-10-12T12:27:00Z")).second)
-
-        // Asked inside the window: the first slice runs to the next step.
-        val late = NextUp.plan(onlyDentist, Instant.parse("2026-10-12T12:02:00Z"), berlin, steps = true)
-        assertEquals(listOf(35, 40, 45, 50, 55, 60), late.slices.map { it.progress })
-        assertEquals(Instant.parse("2026-10-12T12:05:00Z"), late.slices.first().until)
-
-        // The text types switch at the start only.
-        assertEquals(1, NextUp.plan(onlyDentist, now, berlin, steps = false).slices.size)
+        assertEquals(dentist, NextUp.select(plan, Instant.parse("2026-10-12T12:27:00Z")))
+        assertEquals(NextItem.Free, NextUp.select(plan, dentist.start))
     }
 
     @Test

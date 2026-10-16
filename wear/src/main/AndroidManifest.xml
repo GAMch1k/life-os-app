@@ -141,8 +141,8 @@
         </service>
 
         <!-- "Life OS next": the next event or task (docs/wear.md). The class name stays from 0.4 so
-             watch faces that use it keep it. Samsung faces' edge slots take RANGED_VALUE, SHORT_TEXT
-             or an image, some GOAL_PROGRESS; the order is this app's preference where a slot takes several. -->
+             watch faces that use it keep it. Text and images only (P19-07): Samsung's edge slots
+             take RANGED_VALUE or GOAL_PROGRESS first when offered, and draw an arc or a line. -->
         <service
             android:name=".complication.NextEventComplicationService"
             android:exported="true"
@@ -154,7 +154,7 @@
             </intent-filter>
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="RANGED_VALUE,LONG_TEXT,SHORT_TEXT,GOAL_PROGRESS,MONOCHROMATIC_IMAGE,SMALL_IMAGE" />
+                android:value="SHORT_TEXT,LONG_TEXT,MONOCHROMATIC_IMAGE,SMALL_IMAGE" />
             <!-- Pushed after every refresh; this is only the safety net. -->
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"

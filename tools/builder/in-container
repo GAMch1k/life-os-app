@@ -95,6 +95,19 @@ badging_field() { # <badging> <regex with one group>
   sed -n "s/$2/\1/p" <<< "$1" | head -n 1
 }
 
+# BUG-41: Glance tells widgets apart by their GlanceAppWidget's class name. R8
+# once merged QuickCaptureWidget into TodayWidget, and every Today refresh drew
+# Today into the Capture widgets; phone/proguard-rules.pro keeps them apart.
+check_widget_classes() {
+  local mapping=phone/build/outputs/mapping/release/mapping.txt widget
+  [[ -f $mapping ]] || die "$mapping was not written"
+  for widget in TodayWidget QuickCaptureWidget; do
+    grep -qxF "com.gamch1k.lifeos.phone.today.$widget -> com.gamch1k.lifeos.phone.today.$widget:" "$mapping" \
+      || die "R8 renamed or merged the widget class $widget (BUG-41): keep the GlanceAppWidget classes"
+  done
+  echo "phone: the Glance widget classes are kept apart" >&2
+}
+
 verify_and_copy() { # <module> -> prints the release.json entry
   local module=$1 apk resources badging package version_code version_name min_sdk certs signers cert dest
   apk="$module/build/outputs/apk/release/$module-release.apk"
@@ -152,6 +165,7 @@ case "${1:-}" in
     # the heap, never run side by side.
     step "unit tests" testReleaseUnitTest
     step phone --max-workers=1 :phone:assembleRelease
+    check_widget_classes
     step wear --max-workers=1 :wear:assembleRelease
     built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p dist

@@ -76,7 +76,8 @@ A release build empties `dist/` (gitignored), then writes:
 Before anything is copied there, the script checks each APK:
 
 - `apksigner verify`: the signature, and that the release certificate signed it;
-- `aapt2 dump badging`: the package name and the version.
+- `aapt2 dump badging`: the package name and the version;
+- the phone's R8 mapping: `TodayWidget` and `QuickCaptureWidget` stay two classes under their own names (BUG-41, below).
 
 ### `release.json`
 
@@ -178,7 +179,19 @@ The steps, the protocol and the failure modes are in [docs/wear.md](docs/wear.md
 - **Share → Life OS** (`phone/…/share/ShareActivity.kt`, mapping in `core/…/share/ShareMapper.kt`): `ACTION_SEND` with text or an image and `ACTION_SEND_MULTIPLE` with images, from any app. A sheet shows the text or link ("Instagram link", "TikTok link", "YouTube link") and the images, takes an optional note, and queues a text capture, or a photo capture with up to five images (converted to JPEG while the share's read permission lasts). Links stay text with their URL, so Life OS's recipe import and processor handle them.
 - **Push** (`phone/…/push/`): UnifiedPush connector 3.3.5 with the embedded FCM distributor 3.1.0. The app is its own distributor (`saveDistributor(packageName)`), so it never picks another UnifiedPush app such as ntfy. The distributor registers with Play services using the server's VAPID public key (`GET /api/notifications/v1/push/config`), which needs no Firebase project of ours and no gateway; the endpoint is FCM's Web Push endpoint, `https://fcm.googleapis.com/fcm/send/…`. `POST /api/notifications/v1/push/subscriptions` stores it with the connector's `p256dh` and `auth` (again on every start and on a new endpoint; the old subscription is deleted); sign-out deletes it. The connector decrypts each push (RFC 8291); the app shows it on one of three channels (Urgent, Reminders, Information by importance; Urgent, channel id `lifeos.urgent` since 0.3.3, vibrates long and strong, about 5 seconds, like ntfy's max priority, and replaced the first `lifeos.high` channel, since Android fixes a channel's vibration when it is created), with the payload's `tag` as the notification tag, `WearableExtender` dismissal id `lifeos:<id>` and bridge tag `lifeos.<category>` for the watch, one group with a summary, a tap that opens `link` in the Dashboard, and **Done** when the link names a Task (`/tasks/<uuid>`, `/tasks?task=<uuid>`, …; `core/…/push/PushPayload.kt`). Done completes the Task through a WorkManager job (offline too) and tells the watch.
 - **Widgets** (Glance 1.2.0, `phone/…/today/TodayWidget.kt`): **Life OS Capture** (Voice, Photo, Text into their screens) and **Life OS Today** (the events still ahead today and tomorrow, then the Tasks due, overdue first; from the cached Today, re-rendered when it changes, every 30 minutes, and after the hourly background refresh). A tap opens the app.
+  - **BUG-41** (fixed in 0.4.3): the Capture widget sometimes showed Today, and kept it. Glance finds a widget's ids by its `GlanceAppWidget`'s class name, and R8 had merged `QuickCaptureWidget` into `TodayWidget`, so every Today refresh drew Today into the Capture widgets as well; Capture is drawn only when the system asks (placing it, a reboot, an app update), so it stayed until then. Now `proguard-rules.pro` keeps every `GlanceAppWidget` class, the release build fails if R8's mapping shows them renamed or merged, each widget renders only into the ids the system lists for its own receiver, and the Capture widgets are drawn again whenever the app opens.
 - **Voice idempotency** (BUG-40): every voice upload sends its job attempt's `Idempotency-Key` and the `sourceMetadata` JSON stored once for that attempt, so a retry is answered with the same job; 409 `idempotency_conflict` fails the capture with a clear message. Since 0.3.1, Retry after a failed transcription or a 409 starts a new job attempt with a new key, on the phone and the watch.
+
+### Life OS Capture and the side key (P18-12, 0.4.3)
+
+The phone app has a second entry in the app list, **Life OS Capture** (a microphone on the Life OS blue; `phone/…/ui/VoiceCaptureActivity.kt`). It opens straight into Home's Voice screen and starts recording at once; **Stop and send** queues the note, **Cancel** discards it.
+
+- **Over the lock screen**: it shows over the lock screen and turns the screen on, and shows only the recording there. Send, Cancel and Back close it, back to the lock screen; it opens nothing else, so the rest of the app stays behind the unlock. It runs in a task of its own, out of Recents.
+- **Sending** works with the phone locked: the note goes into the queue like any other (`Voice note (0:12) queued for the Inbox` as a toast) and is sent when there is a network.
+- The screen stays on while it records. If it goes off anyway (the side key), the recording stops and is kept; the next launch shows it with Send and Cancel.
+- **Microphone**: the first time, Android asks for it; over the lock screen, the unlock comes first, then the question.
+
+**Double press of the side key** (Samsung One UI): Settings › Advanced features › **Side button** › turn on **Double press** › **Open app** › choose **Life OS Capture**. Pressing the side key twice then records, from the lock screen too. If One UI asks for the unlock before it opens the app, that is One UI's rule for the side key; Life OS Capture itself can show over the lock screen.
 
 ## Installing
 

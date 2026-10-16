@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
 import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.today.CaptureLinks
+import com.gamch1k.lifeos.phone.today.QuickCaptureWidget
 import com.gamch1k.lifeos.phone.ui.AppRoot
 import com.gamch1k.lifeos.phone.ui.Screen
 import com.gamch1k.lifeos.phone.update.UpdateManager
@@ -62,6 +63,8 @@ class MainActivity : ComponentActivity() {
         graph.scope.launch { graph.watchUpdates.check(WatchUpdateManager.Trigger.START) }
         // Push registration is refreshed when the app is opened (not on every background wake).
         graph.scope.launch { if (graph.tokens.current() != null) graph.push.syncIfDue() }
+        // A Capture widget that 0.4.2 drew Today into (BUG-41) heals when the app opens.
+        graph.scope.launch { QuickCaptureWidget.refreshAll(applicationContext) }
     }
 
     override fun onNewIntent(intent: Intent) {
