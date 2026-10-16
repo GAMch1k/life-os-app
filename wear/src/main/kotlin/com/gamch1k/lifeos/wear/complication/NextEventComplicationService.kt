@@ -7,12 +7,10 @@ import android.text.format.DateFormat
 import android.util.Log
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
-import androidx.wear.watchface.complications.data.GoalProgressComplicationData
 import androidx.wear.watchface.complications.data.LongTextComplicationData
 import androidx.wear.watchface.complications.data.MonochromaticImage
 import androidx.wear.watchface.complications.data.MonochromaticImageComplicationData
 import androidx.wear.watchface.complications.data.PlainComplicationText
-import androidx.wear.watchface.complications.data.RangedValueComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.data.SmallImage
 import androidx.wear.watchface.complications.data.SmallImageComplicationData
@@ -38,17 +36,17 @@ import java.time.ZoneId
 
 /**
  * "Life OS next": the next event, else the next task due, else a microphone
- * ([NextUp] has the rules). Short and long text, ranged value and goal
- * progress (the hour before an event fills the arc), and monochromatic and
- * small images (a calendar, a check, or the microphone). Tapping an event or
- * a task opens Today with it highlighted; the microphone records.
+ * ([NextUp] has the rules). Short and long text, and monochromatic and small
+ * images (a calendar, a check, or the microphone); no ranged value or goal
+ * progress, since Samsung's edge slots take those first and draw an arc or a
+ * line around the text (P19-07). Tapping an event or a task opens Today with
+ * it highlighted; the microphone records.
  *
  * The class name stays from 0.4 (`NextEventComplicationService`), so watch
  * faces that already use it keep it. It answers with a timeline from the
- * cached day, so the face moves on at each event start (and each 5-minute
- * step of the arc) without asking again; [TodayRefreshWorker] refreshes the
- * cache and then asks for an update, and the system asks every 30 minutes
- * as a safety net.
+ * cached day, so the face moves on at each event start without asking again;
+ * [TodayRefreshWorker] refreshes the cache and then asks for an update, and
+ * the system asks every 30 minutes as a safety net.
  */
 class NextEventComplicationService : SuspendingTimelineComplicationDataSourceService() {
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationDataTimeline? {
@@ -61,11 +59,11 @@ class NextEventComplicationService : SuspendingTimelineComplicationDataSourceSer
             } catch (failure: Exception) {
                 Log.w(TAG, "could not plan the Today refresh", failure)
             }
-            val plan = NextUp.plan(repository.snapshot.value, Instant.now(), ZoneId.systemDefault(), DateFormat.is24HourFormat(this), steps = kind.fills)
+            val plan = NextUp.plan(repository.snapshot.value, Instant.now(), ZoneId.systemDefault(), DateFormat.is24HourFormat(this))
             ComplicationDataTimeline(
-                defaultComplicationData = data(kind, NextUp.face(kind, plan.default, plan.defaultProgress), taps),
+                defaultComplicationData = data(kind, NextUp.face(kind, plan.default), taps),
                 timelineEntries = plan.slices.map { slice ->
-                    TimelineEntry(TimeInterval(slice.from, slice.until), data(kind, NextUp.face(kind, slice.item, slice.progress), taps))
+                    TimelineEntry(TimeInterval(slice.from, slice.until), data(kind, NextUp.face(kind, slice.item), taps))
                 },
             )
         } catch (cancelled: CancellationException) {
@@ -83,7 +81,7 @@ class NextEventComplicationService : SuspendingTimelineComplicationDataSourceSer
     override fun getPreviewData(type: ComplicationType): ComplicationData? {
         val kind = kindOf(type) ?: return null
         val sample = NextItem.Event("preview", "Dentist", Instant.EPOCH, "14:30", "14:30", day = null)
-        return data(kind, NextUp.face(kind, sample, progress = 40), Taps(this))
+        return data(kind, NextUp.face(kind, sample), Taps(this))
     }
 
     private fun data(kind: NextKind, face: NextFace, taps: Taps): ComplicationData {
@@ -97,18 +95,6 @@ class NextEventComplicationService : SuspendingTimelineComplicationDataSourceSer
                 .setTapAction(tap)
                 .build()
             NextKind.LONG_TEXT -> LongTextComplicationData.Builder(plain(face.text ?: ""), description)
-                .apply { face.title?.let { setTitle(plain(it)) } }
-                .setMonochromaticImage(image)
-                .setTapAction(tap)
-                .build()
-            NextKind.RANGED_VALUE -> RangedValueComplicationData.Builder(face.value, 0f, face.max, description)
-                .apply { face.text?.let { setText(plain(it)) } }
-                .apply { face.title?.let { setTitle(plain(it)) } }
-                .setMonochromaticImage(image)
-                .setTapAction(tap)
-                .build()
-            NextKind.GOAL_PROGRESS -> GoalProgressComplicationData.Builder(face.value, face.max, description)
-                .apply { face.text?.let { setText(plain(it)) } }
                 .apply { face.title?.let { setTitle(plain(it)) } }
                 .setMonochromaticImage(image)
                 .setTapAction(tap)
@@ -158,8 +144,6 @@ class NextEventComplicationService : SuspendingTimelineComplicationDataSourceSer
         fun kindOf(type: ComplicationType): NextKind? = when (type) {
             ComplicationType.SHORT_TEXT -> NextKind.SHORT_TEXT
             ComplicationType.LONG_TEXT -> NextKind.LONG_TEXT
-            ComplicationType.RANGED_VALUE -> NextKind.RANGED_VALUE
-            ComplicationType.GOAL_PROGRESS -> NextKind.GOAL_PROGRESS
             ComplicationType.MONOCHROMATIC_IMAGE -> NextKind.MONOCHROMATIC_IMAGE
             ComplicationType.SMALL_IMAGE -> NextKind.SMALL_IMAGE
             else -> null
