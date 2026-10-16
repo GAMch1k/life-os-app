@@ -11,6 +11,7 @@ import com.gamch1k.lifeos.core.wearlink.WatchUpdateResult
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import com.gamch1k.lifeos.core.wearlink.WearLink
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,7 +31,17 @@ class WatchUpdateRulesTest {
         battery: WatchBattery? = WatchBattery(80, charging = false),
         lastUpdate: WatchUpdateResult? = null,
         capabilities: List<String> = listOf(WearLink.WATCH_CAN_UPDATE),
-    ) = WatchInfo(versionCode = versionCode, versionName = "0.3.$versionCode", sdkInt = 36, capabilities = capabilities, canInstallPackages = canInstall, battery = battery, lastUpdate = lastUpdate)
+        abis: List<String> = emptyList(),
+    ) = WatchInfo(
+        versionCode = versionCode,
+        versionName = "0.3.$versionCode",
+        sdkInt = 36,
+        abis = abis,
+        capabilities = capabilities,
+        canInstallPackages = canInstall,
+        battery = battery,
+        lastUpdate = lastUpdate,
+    )
 
     // ---- The watch: the offer
 
@@ -200,5 +211,31 @@ class WatchUpdateRulesTest {
         assertNull(WatchAbi.smallestApkAbi(WatchAbi.parse("")))
         assertNull(WatchAbi.smallestApkAbi(WatchAbi.parse("x86_64")))
         assertEquals("junk is dropped", listOf("arm64-v8a"), WatchAbi.parse("arm64-v8a, ; rm -rf"))
+    }
+
+    @Test
+    fun `the arm64-only wear APK (0_4_3) goes only to a watch that runs arm64-v8a`() {
+        assertEquals(listOf("arm64-v8a"), WatchAbi.APK_ABIS)
+        assertTrue(WatchAbi.runs(listOf("arm64-v8a", "armeabi-v7a", "armeabi")))
+        assertTrue("not known yet: the benefit of the doubt", WatchAbi.runs(emptyList()))
+        assertFalse(WatchAbi.runs(listOf("armeabi-v7a", "armeabi")))
+        assertEquals(WatchPlan.Push(release), plan(watch(abis = listOf("arm64-v8a", "armeabi-v7a"))))
+        val refused = plan(watch(abis = listOf("armeabi-v7a", "armeabi")))
+        assertTrue(refused is WatchPlan.Unusable)
+        assertTrue((refused as WatchPlan.Unusable).reason, "INSTALL_FAILED_NO_MATCHING_ABIS" in refused.reason)
+        // Update now doesn't change that.
+        assertTrue(plan(watch(abis = listOf("armeabi-v7a")), manual = true) is WatchPlan.Unusable)
+    }
+
+    // ---- The phone's stream timeouts (0.4.3)
+
+    @Test
+    fun `a slow stream that still moves is not cut, unlike 0_4_2's fixed 15 minutes`() {
+        // 0.4.2's 16.6 MB APK at 17 KB/s needed about 16 minutes.
+        assertTrue(WatchUpdateRules.streamCap(16_600_000) > Duration.ofSeconds(16_600_000L / 17_000))
+        // 0.4.3's 6 MB APK at a poor 4 KB/s still fits.
+        assertTrue(WatchUpdateRules.streamCap(6_000_000) >= Duration.ofSeconds(6_000_000L / 4_000))
+        assertEquals("never less than 20 minutes", Duration.ofMinutes(20), WatchUpdateRules.streamCap(1_000))
+        assertEquals(Duration.ofMinutes(2), WatchUpdateRules.STREAM_IDLE)
     }
 }

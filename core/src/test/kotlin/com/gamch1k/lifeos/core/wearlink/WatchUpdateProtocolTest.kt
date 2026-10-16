@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import kotlinx.serialization.Serializable
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -43,13 +44,134 @@ class WatchUpdateProtocolTest {
     @Test
     fun `the wire names are stable`() {
         val json = WatchUpdateCodec.encodeOffer(ApkOffer(id = "o", versionCode = 5, versionName = "0.4.0", size = 10, sha256 = "a".repeat(64))).toString(Charsets.UTF_8)
-        assertEquals("""{"v":1,"id":"o","versionCode":5,"versionName":"0.4.0","size":10,"sha256":"${"a".repeat(64)}"}""", json)
+        assertEquals("""{"v":1,"id":"o","versionCode":5,"versionName":"0.4.0","size":10,"sha256":"${"a".repeat(64)}","transfer":1}""", json)
+        val v2 = ApkOffer(id = "o", versionCode = 10, versionName = "0.4.3", size = 10, sha256 = "a".repeat(64), transfer = 2, url = "/android/lifeos-wear-0.4.3-10.apk")
+        assertEquals(
+            """{"v":1,"id":"o","versionCode":10,"versionName":"0.4.3","size":10,"sha256":"${"a".repeat(64)}","transfer":2,"url":"/android/lifeos-wear-0.4.3-10.apk"}""",
+            WatchUpdateCodec.encodeOffer(v2).toString(Charsets.UTF_8),
+        )
         val reply = WatchUpdateCodec.encodeOfferReply(ApkOfferReply(id = "o", accepted = false, error = UpdateError(UpdateErrorCode.THROTTLED, "wait"), retryAfterSeconds = 25))
-        assertEquals("""{"v":1,"id":"o","accepted":false,"error":{"code":"throttled","message":"wait"},"retryAfterSeconds":25}""", reply.toString(Charsets.UTF_8))
+        assertEquals(
+            """{"v":1,"id":"o","accepted":false,"error":{"code":"throttled","message":"wait"},"retryAfterSeconds":25,"transfer":1,"offset":0,"download":false}""",
+            reply.toString(Charsets.UTF_8),
+        )
+        val accepted = WatchUpdateCodec.encodeOfferReply(ApkOfferReply(id = "o", accepted = true, transfer = 2, offset = 4096, download = true))
+        assertEquals("""{"v":1,"id":"o","accepted":true,"transfer":2,"offset":4096,"download":true}""", accepted.toString(Charsets.UTF_8))
+        val header = WatchUpdateCodec.encode(ApkTransferHeader.serializer(), ApkTransferHeader(id = "o", versionCode = 10, size = 10, sha256 = "a".repeat(64), offset = 4))
+        assertEquals("""{"v":1,"id":"o","versionCode":10,"size":10,"sha256":"${"a".repeat(64)}","offset":4}""", header.toString(Charsets.UTF_8))
+        val status = WatchUpdateCodec.encodeStatus(
+            ApkStatus(id = "o", state = ApkStatusState.NEEDS_STREAM, route = ApkRoute.PHONE, received = 4, size = 10, offset = 4, error = UpdateError(UpdateErrorCode.NO_WIFI, "none")),
+        )
+        assertEquals(
+            """{"v":1,"id":"o","state":"needs_stream","route":"phone","received":4,"size":10,"offset":4,"error":{"code":"no_wifi","message":"none"}}""",
+            status.toString(Charsets.UTF_8),
+        )
+        assertEquals("""{"v":1,"id":"o"}""", WatchUpdateCodec.encodeStatusRequest(ApkStatusRequest(id = "o")).toString(Charsets.UTF_8))
         assertEquals("/lifeos/watch-info", WearLink.PATH_WATCH_INFO)
         assertEquals("/lifeos/watch-report", WearLink.PATH_WATCH_REPORT)
         assertEquals("/lifeos/apk-offer", WearLink.PATH_APK_OFFER)
         assertEquals("/lifeos/apk-transfer", WearLink.PATH_APK_TRANSFER)
+        assertEquals("/lifeos/apk-status", WearLink.PATH_APK_STATUS)
+        assertEquals("apk_transfer_v1", WearLink.WATCH_CAN_UPDATE)
+        assertEquals("apk_transfer_v2", WearLink.WATCH_CAN_RESUME)
+        assertEquals(
+            listOf("waiting_for_wifi", "downloading", "needs_stream", "receiving", "verifying", "installing", "failed", "unknown"),
+            listOf(
+                ApkStatusState.WAITING_FOR_WIFI, ApkStatusState.DOWNLOADING, ApkStatusState.NEEDS_STREAM, ApkStatusState.RECEIVING,
+                ApkStatusState.VERIFYING, ApkStatusState.INSTALLING, ApkStatusState.FAILED, ApkStatusState.UNKNOWN,
+            ),
+        )
+    }
+
+    // ---- Transfer v1/v2 negotiation (0.4.3)
+
+    /** The offer, its reply and the transfer header exactly as a 0.4.0–0.4.2 app declares them. */
+    @Serializable
+    private data class OldOffer(val v: Int = 1, val id: String, val versionCode: Long, val versionName: String, val size: Long, val sha256: String)
+
+    @Serializable
+    private data class OldOfferReply(
+        val v: Int = 1,
+        val id: String,
+        val accepted: Boolean,
+        val error: UpdateError? = null,
+        val retryAfterSeconds: Long? = null,
+    )
+
+    @Serializable
+    private data class OldHeader(val v: Int = 1, val id: String, val versionCode: Long, val size: Long, val sha256: String)
+
+    @Test
+    fun `a 0_4_2 watch reads a 0_4_3 phone's offer and header, and its reply means a whole v1 stream`() {
+        val offer = ApkOffer(id = "o", versionCode = 10, versionName = "0.4.3", size = 6_000_000, sha256 = "a".repeat(64), transfer = TransferVersion.CURRENT, url = "/android/lifeos-wear-0.4.3-10.apk")
+        val old = WatchUpdateCodec.decode(OldOffer.serializer(), WatchUpdateCodec.encodeOffer(offer)) { it.v }
+        assertEquals(OldOffer(id = "o", versionCode = 10, versionName = "0.4.3", size = 6_000_000, sha256 = "a".repeat(64)), old)
+        // What the 0.4.2 watch answers, read by the 0.4.3 phone.
+        val reply = WatchUpdateCodec.decodeOfferReply(WatchUpdateCodec.encode(OldOfferReply.serializer(), OldOfferReply(id = "o", accepted = true)))
+        assertEquals(TransferVersion.V1, reply.transfer)
+        assertEquals(0, reply.offset)
+        assertFalse(reply.download)
+        assertEquals(PushPath.Stream(0), PushPath.after(reply, offer.size))
+        // The phone's header for it: offset 0, which the old watch doesn't know and ignores.
+        val header = ApkTransferHeader(id = "o", versionCode = 10, size = offer.size, sha256 = offer.sha256, offset = 0)
+        val oldHeader = WatchUpdateCodec.decode(OldHeader.serializer(), WatchUpdateCodec.encode(ApkTransferHeader.serializer(), header)) { it.v }
+        assertEquals(OldHeader(id = "o", versionCode = 10, size = 6_000_000, sha256 = "a".repeat(64)), oldHeader)
+    }
+
+    @Test
+    fun `a 0_4_3 watch reads a 0_4_2 phone's offer and header as v1`() {
+        val offer = WatchUpdateCodec.decodeOffer(WatchUpdateCodec.encode(OldOffer.serializer(), OldOffer(id = "o", versionCode = 10, versionName = "0.4.3", size = 10, sha256 = "a".repeat(64))))
+        assertEquals(TransferVersion.V1, offer.transfer)
+        assertNull(offer.url)
+        assertEquals(TransferVersion.V1, TransferVersion.agreed(offer))
+        val stream = ByteArrayOutputStream().apply {
+            val json = WatchUpdateCodec.encode(OldHeader.serializer(), OldHeader(id = "o", versionCode = 10, size = 10, sha256 = "a".repeat(64)))
+            DataOutputStream(this).apply { writeInt(json.size); write(json) }
+        }.toByteArray()
+        assertEquals(0, ApkTransferCodec.readHeader(ByteArrayInputStream(stream)).offset)
+    }
+
+    @Test
+    fun `both sides use the lower transfer version`() {
+        fun offer(transfer: Int) = ApkOffer(id = "o", versionCode = 10, versionName = "0.4.3", size = 10, sha256 = "a".repeat(64), transfer = transfer)
+        assertEquals(TransferVersion.V1, TransferVersion.agreed(offer(1)))
+        assertEquals(TransferVersion.V2, TransferVersion.agreed(offer(2)))
+        assertEquals("a later phone gets what this watch speaks", TransferVersion.V2, TransferVersion.agreed(offer(3)))
+        assertEquals("nonsense counts as v1", TransferVersion.V1, TransferVersion.agreed(offer(0)))
+    }
+
+    @Test
+    fun `the phone's path after an accepted reply`() {
+        val size = 1_000L
+        fun reply(transfer: Int, offset: Long = 0, download: Boolean = false) = ApkOfferReply(id = "o", accepted = true, transfer = transfer, offset = offset, download = download)
+        assertEquals(PushPath.Stream(0), PushPath.after(reply(1), size))
+        assertEquals("a v1 watch's other fields mean nothing", PushPath.Stream(0), PushPath.after(reply(1, offset = 500, download = true), size))
+        assertEquals(PushPath.Stream(0), PushPath.after(reply(2), size))
+        assertEquals(PushPath.Stream(400), PushPath.after(reply(2, offset = 400), size))
+        assertEquals("a whole file: only the end mark", PushPath.Stream(size), PushPath.after(reply(2, offset = size), size))
+        assertEquals("an offset past the end starts over", PushPath.Stream(0), PushPath.after(reply(2, offset = size + 1), size))
+        assertEquals(PushPath.Stream(0), PushPath.after(reply(2, offset = -1), size))
+        assertEquals(PushPath.WatchDownloads, PushPath.after(reply(2, offset = 400, download = true), size))
+    }
+
+    @Test
+    fun `the watch info says whether the watch speaks v2`() {
+        val v1 = WatchInfo(versionCode = 9, versionName = "0.4.2", sdkInt = 36, capabilities = listOf(WearLink.WATCH_CAN_UPDATE))
+        assertTrue(v1.canUpdate)
+        assertFalse(v1.canResume)
+        val v2 = v1.copy(versionCode = 10, capabilities = listOf(WearLink.WATCH_CAN_UPDATE, WearLink.WATCH_CAN_RESUME))
+        assertTrue(v2.canResume)
+    }
+
+    @Test
+    fun `status requests and answers round-trip, and a later state still decodes`() {
+        val request = ApkStatusRequest(id = "o")
+        assertEquals(request, WatchUpdateCodec.decodeStatusRequest(WatchUpdateCodec.encodeStatusRequest(request)))
+        val status = ApkStatus(id = "o", state = ApkStatusState.DOWNLOADING, route = ApkRoute.WIFI, received = 1_000, size = 6_000, bytesPerSecond = 2_000_000)
+        assertEquals(status, WatchUpdateCodec.decodeStatus(WatchUpdateCodec.encodeStatus(status)))
+        val later = WatchUpdateCodec.decodeStatus("""{"v":1,"id":"o","state":"from_the_future","extra":true}""".toByteArray())
+        assertEquals("from_the_future", later.state)
+        assertEquals(0, later.received)
     }
 
     @Test
@@ -124,6 +246,60 @@ class WatchUpdateProtocolTest {
         val received = mutableListOf<Long>()
         ApkTransferCodec.readBody(input, ApkTransferCodec.readHeader(input), ByteArrayOutputStream()) { received += it }
         assertEquals(listOf(4L, 8L, 10L), received)
+    }
+
+    @Test
+    fun `a resumed transfer sends only the bytes after the offset, and the whole file's SHA-256 is checked`() {
+        val apk = Random(11).nextBytes(150_000)
+        val offset = 70_000
+        val header = header(apk).copy(offset = offset.toLong())
+        val progress = mutableListOf<Long>()
+        val stream = ByteArrayOutputStream().also { out ->
+            ApkTransferCodec.send(out, header, ByteArrayInputStream(apk, offset, apk.size - offset), 64 * 1024, onProgress = { progress += it })
+        }.toByteArray()
+        assertEquals(listOf(70_000L + 65_536, 150_000L), progress)
+        val input = ByteArrayInputStream(stream)
+        val read = ApkTransferCodec.readHeader(input)
+        assertEquals(offset.toLong(), read.offset)
+        // The receiver's digest has seen the bytes it already held.
+        val digest = MessageDigest.getInstance("SHA-256").apply { update(apk, 0, offset) }
+        val sink = ByteArrayOutputStream()
+        val received = mutableListOf<Long>()
+        ApkTransferCodec.readBody(input, read, sink, digest) { received += it }
+        assertArrayEquals(apk.copyOfRange(offset, apk.size), sink.toByteArray())
+        assertEquals(progress, received)
+    }
+
+    @Test
+    fun `a resumed transfer over a wrong prefix fails the SHA-256`() {
+        val apk = Random(12).nextBytes(10_000)
+        val header = header(apk).copy(offset = 4_000)
+        val stream = ByteArrayOutputStream().also { ApkTransferCodec.send(it, header, ByteArrayInputStream(apk, 4_000, 6_000)) }.toByteArray()
+        val input = ByteArrayInputStream(stream)
+        val wrong = apk.copyOf(4_000).also { it[17] = (it[17].toInt() xor 1).toByte() }
+        assertCode(UpdateErrorCode.SHA256_MISMATCH) {
+            ApkTransferCodec.readBody(input, ApkTransferCodec.readHeader(input), ByteArrayOutputStream(), MessageDigest.getInstance("SHA-256").apply { update(wrong) })
+        }
+    }
+
+    @Test
+    fun `an offset at the end sends just the end mark, one outside the file is refused`() {
+        val apk = Random(13).nextBytes(1_000)
+        val atEnd = ByteArrayOutputStream().also { ApkTransferCodec.send(it, header(apk).copy(offset = 1_000), ByteArrayInputStream(ByteArray(0))) }.toByteArray()
+        val input = ByteArrayInputStream(atEnd)
+        val sink = ByteArrayOutputStream()
+        ApkTransferCodec.readBody(input, ApkTransferCodec.readHeader(input), sink, MessageDigest.getInstance("SHA-256").apply { update(apk) })
+        assertEquals(0, sink.size())
+        val outside = ByteArrayOutputStream().apply {
+            val json = WatchUpdateCodec.encode(ApkTransferHeader.serializer(), header(apk).copy(offset = 1_001))
+            DataOutputStream(this).apply { writeInt(json.size); write(json) }
+        }.toByteArray()
+        assertCode(UpdateErrorCode.BAD_REQUEST) { receive(outside) }
+        try {
+            ApkTransferCodec.send(ByteArrayOutputStream(), header(apk).copy(offset = -1), ByteArrayInputStream(apk))
+            fail("a negative offset is the phone's bug")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test
