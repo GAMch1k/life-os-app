@@ -90,8 +90,8 @@ class UpdateKeepAlive(private val context: Context) {
     }
 
     private companion object {
-        /** Longer than any update should take; released as soon as nothing holds it. */
-        const val WAKE_LOCK_CAP_MILLIS = 30 * 60_000L
+        /** Longer than any update should take (6.6 MB at 4 KB/s is 28 minutes); released as soon as nothing holds it. */
+        const val WAKE_LOCK_CAP_MILLIS = 60 * 60_000L
     }
 }
 

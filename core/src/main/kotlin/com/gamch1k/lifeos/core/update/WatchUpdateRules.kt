@@ -78,8 +78,8 @@ object WatchUpdateRules {
     /**
      * The longest a whole stream may take: 20 minutes, or the time at
      * 4 KB/s, whichever is longer. 0.4.2's fixed 15 minutes cut the 16.6 MB
-     * APK at 91 % and 95 % over a Bluetooth link of about 17 KB/s; the 6 MB
-     * APK of 0.4.3 takes about 6 minutes at that pace.
+     * APK at 91 % and 95 % over a Bluetooth link of about 17 KB/s; the 6.6 MB
+     * APK of 0.4.3 takes about 6.5 minutes at that pace.
      */
     fun streamCap(bytes: Long): Duration = maxOf(Duration.ofMinutes(20), Duration.ofSeconds(bytes / 4_000))
 

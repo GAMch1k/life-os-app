@@ -27,7 +27,7 @@ android {
     packaging {
         // Compressed native code and dex (extracted at install), unlike AGP's
         // default of storing both uncompressed: the APK the phone sends over
-        // Bluetooth shrinks from 16.6 MB (0.4.2) to about 6 MB; the watch has
+        // Bluetooth shrinks from 16.6 MB (0.4.2) to 6.6 MB; the watch has
         // the space. resources.arsc stays uncompressed (Android requires it).
         jniLibs { useLegacyPackaging = true }
         dex { useLegacyPackaging = true }

@@ -177,7 +177,7 @@ class WatchUpdateService : Service() {
         private const val CHANNEL_ID = "lifeos.watch-update"
         private const val NOTIFICATION_ID = 1906
 
-        /** Longer than any push should take (a 6 MB stream at 4 KB/s is 25 minutes); released as soon as it ends. */
+        /** Longer than any push should take (a 6.6 MB stream at 4 KB/s is 28 minutes); released as soon as it ends. */
         private const val WAKE_LOCK_CAP_MILLIS = 60 * 60_000L
 
         /**

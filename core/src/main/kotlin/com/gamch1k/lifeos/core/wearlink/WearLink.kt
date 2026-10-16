@@ -82,7 +82,7 @@ object WearLink {
      */
     const val WATCH_CAN_RESUME = "apk_transfer_v2"
 
-    /** The largest APK the link carries; the wear APK is about 6 MB since 0.4.3. */
+    /** The largest APK the link carries; the wear APK is about 6.6 MB since 0.4.3. */
     const val MAX_APK_BYTES = 64L * 1024 * 1024
 
     /**
