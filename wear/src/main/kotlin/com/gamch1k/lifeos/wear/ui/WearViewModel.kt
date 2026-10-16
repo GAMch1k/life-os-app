@@ -35,6 +35,9 @@ class WearViewModel(application: Application) : AndroidViewModel(application) {
     /** The last update through the phone (P19-06). */
     val update = graph.updateStore.result
 
+    /** An update arriving now: Wi-Fi or the phone, the bytes, the speed (0.4.3). */
+    val updateProgress = graph.selfUpdater.progress
+
     /** "Install unknown apps" is allowed for Life OS (the setup grants it once). */
     val canInstallUpdates: Boolean get() = getApplication<Application>().packageManager.canRequestPackageInstalls()
 

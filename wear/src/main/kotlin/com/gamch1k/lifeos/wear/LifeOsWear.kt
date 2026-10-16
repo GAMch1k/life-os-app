@@ -21,7 +21,11 @@ import com.gamch1k.lifeos.wear.net.RoutingTransport
 import com.gamch1k.lifeos.wear.tile.TodayTileService
 import com.gamch1k.lifeos.wear.today.TodayRefreshWorker
 import com.gamch1k.lifeos.wear.today.TodayRepository
+import com.gamch1k.lifeos.wear.update.AndroidWifiNetworks
+import com.gamch1k.lifeos.wear.update.CronetApkHttp
+import com.gamch1k.lifeos.wear.update.DirectDownload
 import com.gamch1k.lifeos.wear.update.SelfUpdater
+import com.gamch1k.lifeos.wear.update.UpdateKeepAlive
 import com.gamch1k.lifeos.wear.update.WatchUpdateStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,9 +69,23 @@ class WearGraph(private val app: Context) {
     /** True while one of the app's activities is started (visible). */
     val foregroundTracker = ForegroundTracker()
 
-    /** Updates through the phone (P19-06). */
+    /** Updates through the phone (P19-06); since 0.4.3 also the watch's own download over Wi-Fi. */
     val updateStore = WatchUpdateStore(app)
-    val selfUpdater = SelfUpdater(app, updateStore, phoneLink, foreground = { foregroundTracker.started })
+    val updateKeepAlive = UpdateKeepAlive(app)
+    val selfUpdater = SelfUpdater(
+        context = app,
+        store = updateStore,
+        phone = phoneLink,
+        foreground = { foregroundTracker.started },
+        keepAlive = updateKeepAlive,
+        directDownload = DirectDownload(
+            networks = AndroidWifiNetworks(app),
+            http = CronetApkHttp(app),
+            userAgent = "LifeOS-Wear/${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+        ),
+        credentials = { credentials.current },
+        scope = scope,
+    )
 
     val today = TodayRepository(
         cacheFile = File(app.filesDir, "today.json"),

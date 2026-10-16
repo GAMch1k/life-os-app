@@ -20,6 +20,7 @@ import androidx.wear.compose.material3.Text
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import com.gamch1k.lifeos.wear.BuildConfig
 import com.gamch1k.lifeos.wear.R
+import com.gamch1k.lifeos.wear.update.UpdateProgressText
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -31,7 +32,9 @@ fun ConnectionScreen(viewModel: WearViewModel) {
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
     val message by viewModel.connectionMessage.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
-    val use24Hour = DateFormat.is24HourFormat(LocalContext.current)
+    val updating by viewModel.updateProgress.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val use24Hour = DateFormat.is24HourFormat(context)
     val listState = rememberTransformingLazyColumnState()
     LaunchedEffect(Unit) { viewModel.lookForPhone() }
 
@@ -89,6 +92,17 @@ fun ConnectionScreen(viewModel: WearViewModel) {
                         }
                     },
                 )
+            }
+            updating?.let { progress ->
+                // An update arriving now (0.4.3): the route, the numbers, the ETA, live.
+                item {
+                    Text(
+                        UpdateProgressText.line(context, progress),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             message?.let { text ->
                 item { Text(text, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center) }

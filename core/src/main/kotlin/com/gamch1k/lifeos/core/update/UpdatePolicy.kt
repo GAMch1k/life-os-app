@@ -73,6 +73,9 @@ object UpdatePolicy {
         else -> null
     }
 
+    /** Whether [url] is the path of one of [app]'s APKs under `/android/` (the watch checks the phone's offer with it). */
+    fun isApkPath(app: ReleaseApp, url: String): Boolean = apkPath(app).matches(url) && ".." !in url
+
     /** Whether an automatic check is due, at most one per [interval]. */
     fun checkDue(lastCheck: Instant?, now: Instant, interval: Duration): Boolean =
         lastCheck == null || lastCheck.isAfter(now) || Duration.between(lastCheck, now) >= interval

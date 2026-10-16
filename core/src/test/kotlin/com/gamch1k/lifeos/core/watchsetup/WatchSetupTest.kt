@@ -129,6 +129,7 @@ class WatchSetupTest {
                 "run appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow",
                 "run appops get com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES",
                 "run pm grant com.gamch1k.lifeos android.permission.POST_NOTIFICATIONS",
+                "run cmd deviceidle whitelist +com.gamch1k.lifeos",
                 "run am start -n com.gamch1k.lifeos/com.gamch1k.lifeos.wear.ui.MainActivity",
                 "disconnect",
             ),

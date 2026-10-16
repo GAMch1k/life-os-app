@@ -75,4 +75,17 @@
     <string name="update_failed">%1$s failed: %2$s</string>
     <string name="update_none">Through the phone; none yet</string>
     <string name="update_not_allowed">Not allowed yet: run Set up the watch app on the phone</string>
+    <!-- An update arriving (0.4.3): Connection and the ongoing notification. -->
+    <string name="update_progress_channel">Update progress</string>
+    <string name="update_progress_title">Updating to %1$s</string>
+    <string name="update_progress_title_plain">Updating Life OS</string>
+    <string name="update_progress_starting">Getting ready…</string>
+    <string name="update_progress_waiting_wifi">Getting Wi-Fi…</string>
+    <string name="update_progress_wifi">Over Wi-Fi: %1$s</string>
+    <string name="update_progress_waiting_phone">Waiting for the phone…</string>
+    <string name="update_progress_waiting_phone_because">Waiting for the phone (%1$s)</string>
+    <string name="update_progress_phone">From the phone: %1$s</string>
+    <string name="update_progress_verifying">Checking the update…</string>
+    <string name="update_progress_installing">Installing…</string>
+    <string name="update_progress_failed">Update failed: %1$s</string>
 </resources>

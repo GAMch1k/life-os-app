@@ -140,7 +140,8 @@ sealed interface SetupState {
  * 3. Find the connection port over mDNS, else ask for it; connect.
  * 4. Read `ro.product.cpu.abilist`; install the APK; allow "Install unknown
  *    apps" for Life OS (`appops set … REQUEST_INSTALL_PACKAGES allow`), which
- *    One UI Watch has no screen for; allow its notifications; start it once.
+ *    One UI Watch has no screen for; allow its notifications; take it off the
+ *    battery optimisations (`cmd deviceidle whitelist +…`); start it once.
  * 5. Disconnect, and wait until the watch app answers over the Data Layer.
  *
  * From then on the watch updates itself with the APKs the phone sends it, and
@@ -359,6 +360,10 @@ class WatchSetup(
             }
             // Optional: the update's one-tap confirmation and the recording notice are notifications.
             attempt { adb.run("pm grant $packageName android.permission.POST_NOTIFICATIONS") }
+            // Optional: off the battery optimisations, the app may start its update's foreground
+            // service from the background (one of Android's documented exemptions), whatever the
+            // Data Layer's callbacks allow (docs/wear.md "Install and updates").
+            attempt { adb.run("cmd deviceidle whitelist +$packageName") }
 
             step = SetupStep.STARTING
             current = SetupState.Working(step)

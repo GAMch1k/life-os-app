@@ -16,10 +16,21 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         // versionCode/versionName come from version.properties (root build.gradle.kts).
 
-        // Embedded Cronet (direct calls when the phone is away) ships native
-        // code per ABI. Galaxy Watches run 64-bit or 32-bit ARM user space
-        // depending on the model and firmware, so both ARM ABIs are kept.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // Embedded Cronet (direct calls when the phone is away, the update's
+        // own download) ships native code per ABI. Since 0.4.3 only arm64-v8a:
+        // the Galaxy Watch 8 runs a 64-bit user space, and the phone doesn't
+        // push this APK to a watch without it (WatchAbi in core). Keep in step
+        // with WatchAbi.APK_ABIS.
+        ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    packaging {
+        // Compressed native code and dex (extracted at install), unlike AGP's
+        // default of storing both uncompressed: the APK the phone sends over
+        // Bluetooth shrinks from 16.6 MB (0.4.2) to 6.6 MB; the watch has
+        // the space. resources.arsc stays uncompressed (Android requires it).
+        jniLibs { useLegacyPackaging = true }
+        dex { useLegacyPackaging = true }
     }
 
     buildTypes {

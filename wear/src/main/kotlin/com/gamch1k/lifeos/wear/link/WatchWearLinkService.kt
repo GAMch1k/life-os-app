@@ -22,7 +22,8 @@ import kotlinx.coroutines.tasks.await
  * The watch's end of the phone's pings (docs/wear.md): a new token, changed
  * tasks or events, and the phone app coming into reach (then waiting
  * recordings go out at once). Since 0.4.0 also the phone's update requests:
- * the version question, an APK offer, and the APK's channel (P19-06).
+ * the version question, an APK offer, and the APK's channel (P19-06); since
+ * 0.4.3 the status of the watch's own download.
  */
 class WatchWearLinkService : WearableListenerService() {
     override fun onMessageReceived(event: MessageEvent) {
@@ -37,6 +38,7 @@ class WatchWearLinkService : WearableListenerService() {
         val updater = LifeOsWear.graph(this).selfUpdater
         return when (path) {
             WearLink.PATH_WATCH_INFO -> Tasks.forResult(updater.handleInfoRequest(request))
+            WearLink.PATH_APK_STATUS -> Tasks.forResult(updater.handleStatusRequest(request))
             WearLink.PATH_APK_OFFER -> {
                 val reply = TaskCompletionSource<ByteArray>()
                 scope.launch {
@@ -55,16 +57,21 @@ class WatchWearLinkService : WearableListenerService() {
     override fun onChannelOpened(channel: ChannelClient.Channel) {
         if (channel.path != WearLink.PATH_APK_TRANSFER) return
         val channels = Wearable.getChannelClient(applicationContext)
-        val updater = LifeOsWear.graph(this).selfUpdater
+        val graph = LifeOsWear.graph(this)
+        // At once, while Play services has this listener bound (0.4.3): the transfer must outlive
+        // the binding and the screen going off (a wake lock, and the foreground service where allowed).
+        graph.updateKeepAlive.acquire()
         scope.launch {
             try {
                 val input = channels.getInputStream(channel).await()
                 val output = channels.getOutputStream(channel).await()
-                updater.handleTransfer(input, output)
+                graph.selfUpdater.handleTransfer(input, output)
                 output.close()
             } catch (_: Exception) {
-                // The phone sees the channel close and counts the transfer as failed.
+                // The phone sees the channel close and counts the transfer as failed (or resumes it).
                 channels.close(channel)
+            } finally {
+                graph.updateKeepAlive.release()
             }
         }
     }
