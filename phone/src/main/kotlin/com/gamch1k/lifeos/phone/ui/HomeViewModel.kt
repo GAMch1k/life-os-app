@@ -111,6 +111,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 graph.client.completeTask(taskId)
                 messageChannel.send(HomeMessage("Done: $title", undoTaskId = taskId))
                 graph.today.taskCompleted(taskId)
+                // A snoozed reminder about it would only come back for nothing.
+                graph.snoozes.taskDone(taskId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: LifeOsException) {
