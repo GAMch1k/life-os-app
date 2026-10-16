@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- The update's one-tap confirmation, when Android asks, and the recording notice. Granted by the setup. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Updates since 0.4.3: a dataSync foreground service with a wake lock while an update arrives,
+         and Wi-Fi requested for the watch's own download of the APK (docs/wear.md). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <uses-feature android:name="android.hardware.type.watch" />
     <uses-feature
@@ -100,6 +105,12 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Keeps the app alive while an update arrives, with its progress (0.4.3). -->
+        <service
+            android:name=".update.WatchUpdateService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".tile.CaptureTileService"

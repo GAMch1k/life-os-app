@@ -13,7 +13,6 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import com.gamch1k.lifeos.core.wearlink.ApkRoute
 import com.gamch1k.lifeos.core.wearlink.ApkStatusState
 import com.gamch1k.lifeos.wear.LifeOsWear
 import com.gamch1k.lifeos.wear.R
@@ -68,7 +67,8 @@ class UpdateKeepAlive(private val context: Context) {
             count + 1
         }
         if (first) runCatching { wakeLock?.acquire(WAKE_LOCK_CAP_MILLIS) }
-        foreground = WatchUpdateService.start(context)
+        // Once it runs, the service stays until nothing holds this any more.
+        if (first || !WatchUpdateService.running) foreground = WatchUpdateService.start(context)
     }
 
     fun release() {
@@ -104,38 +104,49 @@ class UpdateKeepAlive(private val context: Context) {
 class WatchUpdateService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var watcher: Job? = null
+    private var lastStartId = 0
     private var lastNotified = 0L
     private var lastState: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         val graph = LifeOsWear.graph(this)
         // Every startForegroundService() needs its startForeground(), even while already running.
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(graph.selfUpdater.progress.value), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } catch (_: RuntimeException) {
-            stopSelf()
+            // Not allowed after all (ForegroundServiceStartNotAllowedException, a missing permission):
+            // the wake lock alone keeps the update going.
+            stopSelf(startId)
             return START_NOT_STICKY
         }
+        running = true
         if (watcher?.isActive != true) {
             watcher = scope.launch {
                 val updates = launch { graph.selfUpdater.progress.collect { notifyProgress(it) } }
-                graph.updateKeepAlive.held.first { it == 0 }
+                // On the main thread, like onStartCommand: a new hold between the check and the stop
+                // comes with a new start, and stopSelfResult then keeps the service.
+                while (true) {
+                    graph.updateKeepAlive.held.first { it == 0 }
+                    if (graph.updateKeepAlive.held.value == 0) break
+                }
                 updates.cancel()
                 ServiceCompat.stopForeground(this@WatchUpdateService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelfResult(lastStartId)
             }
         }
         return START_NOT_STICKY
     }
 
-    /** Android 15's limit for dataSync services (6 hours a day); an update never gets near it. */
+    /** Android 15's daily limit for dataSync services (6 hours); an update never gets near it. */
     override fun onTimeout(startId: Int, fgsType: Int) {
         stopSelf()
     }
 
     override fun onDestroy() {
+        running = false
         scope.cancel()
         super.onDestroy()
     }
@@ -145,7 +156,7 @@ class WatchUpdateService : Service() {
         if (progress?.state == lastState && now - lastNotified < 1_000) return
         lastState = progress?.state
         lastNotified = now
-        getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(progress))
+        runCatching { getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(progress)) }
     }
 
     private fun notification(progress: UpdateProgress?): Notification {
@@ -156,7 +167,10 @@ class WatchUpdateService : Service() {
         val numbers = progress?.progress
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_refresh)
-            .setContentTitle(getString(R.string.update_progress_title, progress?.versionName.orEmpty()))
+            .setContentTitle(
+                progress?.versionName?.takeIf { it.isNotEmpty() }?.let { getString(R.string.update_progress_title, it) }
+                    ?: getString(R.string.update_progress_title_plain),
+            )
             .setContentText(UpdateProgressText.line(this, progress))
             .setContentIntent(open)
             .setOngoing(true)
@@ -165,14 +179,19 @@ class WatchUpdateService : Service() {
             .setLocalOnly(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-        val moving = progress?.state == ApkStatusState.DOWNLOADING || progress?.state == ApkStatusState.RECEIVING
-        builder.setProgress(100, numbers?.percent ?: 0, !moving || numbers == null)
+        val moving = progress?.moving == true && numbers != null
+        builder.setProgress(100, numbers?.percent ?: 0, !moving)
         return builder.build()
     }
 
     companion object {
         private const val CHANNEL_ID = "update_progress"
         private const val NOTIFICATION_ID = 1907
+
+        /** Whether the service runs in the foreground now. */
+        @Volatile
+        var running: Boolean = false
+            private set
 
         /** Starts (or refreshes) the service; false when Android doesn't allow a foreground service now. */
         fun start(context: Context): Boolean = try {
@@ -191,18 +210,20 @@ object UpdateProgressText {
     fun line(context: Context, progress: UpdateProgress?): String {
         if (progress == null) return context.getString(R.string.update_progress_starting)
         val numbers = progress.progress?.detail()
+        val why = progress.error?.message?.ifEmpty { null } ?: progress.error?.code
         return when (progress.state) {
             ApkStatusState.WAITING_FOR_WIFI -> context.getString(R.string.update_progress_waiting_wifi)
             ApkStatusState.DOWNLOADING -> context.getString(R.string.update_progress_wifi, numbers ?: "…")
-            ApkStatusState.NEEDS_STREAM -> context.getString(R.string.update_progress_waiting_phone)
+            ApkStatusState.NEEDS_STREAM -> if (why != null) {
+                context.getString(R.string.update_progress_waiting_phone_because, why)
+            } else {
+                context.getString(R.string.update_progress_waiting_phone)
+            }
             ApkStatusState.RECEIVING -> context.getString(R.string.update_progress_phone, numbers ?: "…")
             ApkStatusState.VERIFYING -> context.getString(R.string.update_progress_verifying)
             ApkStatusState.INSTALLING -> context.getString(R.string.update_progress_installing)
-            ApkStatusState.FAILED -> context.getString(
-                R.string.update_progress_failed,
-                progress.error?.message?.ifEmpty { null } ?: progress.error?.code ?: "?",
-            )
+            ApkStatusState.FAILED -> context.getString(R.string.update_progress_failed, why ?: "?")
             else -> progress.state
-        } + (if (progress.route == ApkRoute.PHONE && progress.note != null && progress.state == ApkStatusState.NEEDS_STREAM) " (${progress.note})" else "")
+        }
     }
 }

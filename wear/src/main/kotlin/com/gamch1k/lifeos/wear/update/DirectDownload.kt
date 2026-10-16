@@ -204,9 +204,13 @@ class DirectDownload(
         const val WIFI_TIMEOUT_MILLIS = 45_000L
         private const val CHECKPOINT_BYTES = 256L * 1024
 
-        /** Whether the watch tries its own download at all: a wear APK's address and a complete token. */
-        fun worthTrying(url: String?, credentials: WearCredentials?): Boolean =
-            url != null && UpdatePolicy.isApkPath(ReleaseApp.WEAR, url) && credentials?.isComplete == true
+        /**
+         * Whether the watch tries its own download of an offered APK of [size] bytes, of which it
+         * holds [held]: only with a wear APK's address from the phone and a complete token, and
+         * only while bytes are missing. Otherwise the phone streams it.
+         */
+        fun worthTrying(url: String?, credentials: WearCredentials?, held: Long, size: Long): Boolean =
+            held < size && url != null && UpdatePolicy.isApkPath(ReleaseApp.WEAR, url) && credentials?.isComplete == true
 
         /** The first byte of `Content-Range: bytes 123-456/789`, or null. */
         fun rangeStart(headers: Map<String, List<String>>): Long? =
