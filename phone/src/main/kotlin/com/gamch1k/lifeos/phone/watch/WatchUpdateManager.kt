@@ -447,6 +447,12 @@ class WatchUpdateManager(
                 retry = "the resumed file was damaged; starting over"
                 continue
             }
+            // The watch holds fewer bytes than the stream assumed, or forgot the offer: a new offer says where it stands.
+            if (resumable && (error?.code == UpdateErrorCode.ABORTED || error?.code == UpdateErrorCode.UNKNOWN_OFFER) && ++breaks < MAX_BREAKS) {
+                retry = "the watch asked to start again ($text)"
+                delay(RETRY_DELAY_MILLIS)
+                continue
+            }
             return Delivery.Failed("the watch discarded it: $text")
         }
     }
