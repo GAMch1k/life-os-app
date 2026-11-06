@@ -1,5 +1,7 @@
 package com.gamch1k.lifeos.core.watchsetup
 
+import com.gamch1k.lifeos.core.update.WatchAbi
+
 /** What the owner types from the watch's Wireless debugging screens: a host and, usually, a port. */
 data class WatchAddress(val host: String, val port: Int?) {
     override fun toString() = if (port == null) host else if (':' in host) "[$host]:$port" else "$host:$port"
@@ -97,7 +99,7 @@ object ShellOutput {
         "INSTALL_FAILED_UPDATE_INCOMPATIBLE" -> "a Life OS signed with another key is installed on the watch; uninstall it there first"
         "INSTALL_FAILED_INSUFFICIENT_STORAGE" -> "the watch is out of storage"
         "INSTALL_FAILED_OLDER_SDK" -> "the watch's Wear OS is too old for this version"
-        "INSTALL_FAILED_NO_MATCHING_ABIS" -> "the watch's processor runs neither of the APK's ABIs"
+        "INSTALL_FAILED_NO_MATCHING_ABIS" -> "the watch doesn't run the ABI the watch app is built for (${WatchAbi.APK_ABIS.joinToString()})"
         "INSTALL_FAILED_VERSION_DOWNGRADE" -> "the watch already has a newer Life OS"
         "INSTALL_FAILED_USER_RESTRICTED" -> "the watch blocks installs over ADB"
         "INSTALL_PARSE_FAILED_NO_CERTIFICATES", "INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES" -> "the APK's signature is broken"

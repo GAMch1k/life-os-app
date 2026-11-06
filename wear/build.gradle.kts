@@ -17,11 +17,18 @@ android {
         // versionCode/versionName come from version.properties (root build.gradle.kts).
 
         // Embedded Cronet (direct calls when the phone is away, the update's
-        // own download) ships native code per ABI. Since 0.4.3 only arm64-v8a:
-        // the Galaxy Watch 8 runs a 64-bit user space, and the phone doesn't
-        // push this APK to a watch without it (WatchAbi in core). Keep in step
-        // with WatchAbi.APK_ABIS.
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // own download) ships native code per ABI. One ABI keeps the APK the
+        // phone streams over Bluetooth small; since 0.4.5 (BUG-45) it is
+        // armeabi-v7a: the Galaxy Watch 8 (Wear OS 6) runs 32-bit apps only
+        // and reports armeabi-v7a, armeabi. 0.4.3 and 0.4.4 carried arm64-v8a
+        // only, which Android there refuses (INSTALL_FAILED_NO_MATCHING_ABIS),
+        // and the phone, which checks the watch's ABIs before it sends an
+        // update (WatchAbi in core), never sent them. Keep in step with
+        // WatchAbi.APK_ABIS (WearApkAbiTest compares them through BuildConfig);
+        // tools/builder/in-container fails a release without lib/armeabi-v7a/.
+        val apkAbis = listOf("armeabi-v7a")
+        ndk { abiFilters += apkAbis }
+        buildConfigField("String", "APK_ABIS", "\"${apkAbis.joinToString(",")}\"")
     }
 
     packaging {

@@ -358,4 +358,11 @@ class WatchSetupTest {
         assertEquals("default", ShellOutput.appOpMode("Uid mode: x\nREQUEST_INSTALL_PACKAGES: default\n", "REQUEST_INSTALL_PACKAGES"))
         assertNull(ShellOutput.appOpMode("", "REQUEST_INSTALL_PACKAGES"))
     }
+
+    @Test
+    fun `an install refused for the ABI names the one the watch app is built for`() {
+        val failure = ShellOutput.install("Failure [INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries, res=-113]") as ShellOutput.Install.Failure
+        assertEquals("INSTALL_FAILED_NO_MATCHING_ABIS", failure.code)
+        assertEquals("the watch doesn't run the ABI the watch app is built for (armeabi-v7a)", ShellOutput.explain(failure))
+    }
 }

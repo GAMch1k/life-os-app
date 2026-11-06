@@ -241,10 +241,13 @@ private fun Done(state: SetupState.Done, onClose: () -> Unit) {
         Text("Now turn Wireless debugging off", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         Step("On the watch: Settings › Developer options › Wireless debugging: off. You can turn ADB debugging off too.")
         if (state.abis.isNotEmpty()) {
-            val smallest = WatchAbi.smallestApkAbi(state.abis)
+            val runs = WatchAbi.runs(state.abis)
             Text(
-                "The watch runs ${state.abis.joinToString()}." + (smallest?.let { " A watch APK with only $it would be about 4–7 MB smaller (not changed yet)." } ?: ""),
+                "The watch runs ${state.abis.joinToString()}. " +
+                    if (runs) "The watch app carries ${WatchAbi.APK_ABIS.joinToString()} code, which it runs."
+                    else "The watch app carries ${WatchAbi.APK_ABIS.joinToString()} code only, which it can't run, so the phone won't send it updates.",
                 style = MaterialTheme.typography.bodySmall,
+                color = if (runs) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
             )
         }
         state.notes.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
