@@ -108,8 +108,8 @@ check_widget_classes() {
   echo "phone: the Glance widget classes are kept apart" >&2
 }
 
-verify_and_copy() { # <module> -> prints the release.json entry
-  local module=$1 apk resources badging package version_code version_name min_sdk certs signers cert dest
+verify_and_copy() { # <module> <abi its native code must include> -> prints the release.json entry
+  local module=$1 abi=$2 apk resources badging package version_code version_name min_sdk certs signers cert dest
   apk="$module/build/outputs/apk/release/$module-release.apk"
   [[ -f $apk ]] || die "$apk was not built"
 
@@ -135,6 +135,9 @@ verify_and_copy() { # <module> -> prints the release.json entry
   resources=$(aapt2 dump resources "$apk")
   grep -q 'array/android_wear_capabilities' <<< "$resources" \
     || die "$apk lacks array/android_wear_capabilities (resource shrinking must stay off, see build.gradle.kts)"
+  # BUG-45: the native code's ABI. The Galaxy Watch 8 runs 32-bit apps only,
+  # so the wear APK must carry armeabi-v7a; the phone APK arm64-v8a.
+  tools/builder/check-apk-abi "$apk" "$abi" || die "$apk lacks native code for $abi (BUG-45)"
 
   dest="dist/lifeos-$module-$version_name-$version_code.apk"
   cp "$apk" "$dest"
@@ -170,8 +173,8 @@ case "${1:-}" in
     built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p dist
     rm -f dist/*.apk dist/release.json
-    phone=$(verify_and_copy phone)
-    wear=$(verify_and_copy wear)
+    phone=$(verify_and_copy phone arm64-v8a)
+    wear=$(verify_and_copy wear armeabi-v7a)
     printf '{\n  "schema": 1,\n  "apps": {\n%s,\n%s\n  }\n}\n' "$phone" "$wear" > dist/release.json
     echo "wrote dist/release.json" >&2
     ls -l dist >&2
