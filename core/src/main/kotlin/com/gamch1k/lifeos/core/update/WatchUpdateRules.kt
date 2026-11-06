@@ -198,25 +198,22 @@ object WatchUpdateRules {
 
 /**
  * The watch's ABIs (`ro.product.cpu.abilist`, read over ADB at setup, or
- * `Build.SUPPORTED_ABIS` from the watch app). Since 0.4.3 the wear APK
- * carries embedded Cronet's native code for [APK_ABIS] only (arm64-v8a: the
- * Galaxy Watch 8's Exynos W1000 runs a 64-bit user space); a watch that runs
- * 32-bit ARM only would refuse it with INSTALL_FAILED_NO_MATCHING_ABIS, so the
- * phone doesn't push it there.
+ * `Build.SUPPORTED_ABIS` from the watch app). The wear APK carries embedded
+ * Cronet's native code for [APK_ABIS] only; a watch that runs none of them
+ * would refuse it with INSTALL_FAILED_NO_MATCHING_ABIS, so the phone doesn't
+ * push it there.
+ *
+ * Since 0.4.5 (BUG-45) that is armeabi-v7a: the Galaxy Watch 8 (Wear OS 6)
+ * runs 32-bit apps only and reports `armeabi-v7a, armeabi`. 0.4.3 and 0.4.4
+ * carried arm64-v8a only, on the wrong belief that its Exynos W1000 runs a
+ * 64-bit user space, and never reached it.
  */
 object WatchAbi {
     /** The ABIs whose native code the wear APK carries (`ndk.abiFilters` in wear/build.gradle.kts). */
-    val APK_ABIS = listOf("arm64-v8a")
+    val APK_ABIS = listOf("armeabi-v7a")
 
     fun parse(abilist: String): List<String> = abilist.split(',').map { it.trim() }.filter { it.isNotEmpty() && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
 
     /** Whether a watch reporting [abis] can install the wear APK; an empty list (not known) is given the benefit of the doubt. */
     fun runs(abis: List<String>): Boolean = abis.isEmpty() || abis.any { it in APK_ABIS }
-
-    /** The single ABI a watch-only APK would carry, or null when unknown (keep both). */
-    fun smallestApkAbi(abis: List<String>): String? = when {
-        "arm64-v8a" in abis -> "arm64-v8a"
-        "armeabi-v7a" in abis -> "armeabi-v7a"
-        else -> null
-    }
 }

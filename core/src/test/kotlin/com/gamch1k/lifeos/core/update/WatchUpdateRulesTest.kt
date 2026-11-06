@@ -203,28 +203,45 @@ class WatchUpdateRulesTest {
     // ---- The watch's ABIs
 
     @Test
-    fun `the ABI list says which single ABI a smaller watch APK would need`() {
-        val abis = WatchAbi.parse("arm64-v8a,armeabi-v7a,armeabi\n")
-        assertEquals(listOf("arm64-v8a", "armeabi-v7a", "armeabi"), abis)
-        assertEquals("arm64-v8a", WatchAbi.smallestApkAbi(abis))
-        assertEquals("armeabi-v7a", WatchAbi.smallestApkAbi(WatchAbi.parse("armeabi-v7a,armeabi")))
-        assertNull(WatchAbi.smallestApkAbi(WatchAbi.parse("")))
-        assertNull(WatchAbi.smallestApkAbi(WatchAbi.parse("x86_64")))
+    fun `the ABI list is read from getprop's answer`() {
+        assertEquals(listOf("arm64-v8a", "armeabi-v7a", "armeabi"), WatchAbi.parse("arm64-v8a,armeabi-v7a,armeabi\n"))
+        assertEquals("the Galaxy Watch 8", listOf("armeabi-v7a", "armeabi"), WatchAbi.parse("armeabi-v7a,armeabi\n"))
+        assertEquals(emptyList<String>(), WatchAbi.parse(""))
         assertEquals("junk is dropped", listOf("arm64-v8a"), WatchAbi.parse("arm64-v8a, ; rm -rf"))
     }
 
     @Test
-    fun `the arm64-only wear APK (0_4_3) goes only to a watch that runs arm64-v8a`() {
-        assertEquals(listOf("arm64-v8a"), WatchAbi.APK_ABIS)
+    fun `the wear APK carries armeabi-v7a, which the Galaxy Watch 8 runs (BUG-45)`() {
+        assertEquals(listOf("armeabi-v7a"), WatchAbi.APK_ABIS)
+        // The owner's Galaxy Watch 8 on 0.4.2 (9): 32-bit apps only. 0.4.3 and 0.4.4 (arm64-v8a only) were refused here.
+        val v045 = release.copy(versionCode = 12, versionName = "0.4.5", size = 6_500_000, url = "/android/lifeos-wear-0.4.5-12.apk")
+        val manifest045 = UpdateManifest(1, apps = UpdateApps(wear = v045))
+        val galaxyWatch8 = watch(versionCode = 9, abis = listOf("armeabi-v7a", "armeabi"))
+        assertTrue(WatchAbi.runs(galaxyWatch8.abis))
+        assertEquals(WatchPlan.Push(v045), plan(galaxyWatch8, manifest = manifest045))
+        assertEquals(WatchPlan.Push(v045), plan(galaxyWatch8, manual = true, manifest = manifest045))
+        // A 64-bit watch that runs 32-bit apps too.
         assertTrue(WatchAbi.runs(listOf("arm64-v8a", "armeabi-v7a", "armeabi")))
+        assertEquals(WatchPlan.Push(release), plan(watch(abis = listOf("arm64-v8a", "armeabi-v7a", "armeabi"))))
         assertTrue("not known yet: the benefit of the doubt", WatchAbi.runs(emptyList()))
-        assertFalse(WatchAbi.runs(listOf("armeabi-v7a", "armeabi")))
-        assertEquals(WatchPlan.Push(release), plan(watch(abis = listOf("arm64-v8a", "armeabi-v7a"))))
-        val refused = plan(watch(abis = listOf("armeabi-v7a", "armeabi")))
-        assertTrue(refused is WatchPlan.Unusable)
-        assertTrue((refused as WatchPlan.Unusable).reason, "INSTALL_FAILED_NO_MATCHING_ABIS" in refused.reason)
-        // Update now doesn't change that.
-        assertTrue(plan(watch(abis = listOf("armeabi-v7a")), manual = true) is WatchPlan.Unusable)
+        assertEquals(WatchPlan.Push(release), plan(watch(abis = emptyList())))
+    }
+
+    @Test
+    fun `a watch that can't run armeabi-v7a is refused, saying why`() {
+        for (abis in listOf(listOf("arm64-v8a"), listOf("armeabi"), listOf("x86_64", "x86"))) {
+            assertFalse(abis.toString(), WatchAbi.runs(abis))
+            val refused = plan(watch(abis = abis))
+            assertTrue("$abis: $refused", refused is WatchPlan.Unusable)
+            val reason = (refused as WatchPlan.Unusable).reason
+            assertEquals(
+                "the watch app is built for armeabi-v7a only and the watch reports ${abis.joinToString()}; " +
+                    "Android would refuse it (INSTALL_FAILED_NO_MATCHING_ABIS)",
+                reason,
+            )
+            // Update now doesn't change that.
+            assertTrue(plan(watch(abis = abis), manual = true) is WatchPlan.Unusable)
+        }
     }
 
     // ---- The phone's stream timeouts (0.4.3)

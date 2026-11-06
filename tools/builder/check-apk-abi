@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Fails unless an APK carries native code for an ABI (lib/<abi>/*.so), and
+# names the ABIs it carries. tools/builder/in-container runs it on every
+# release APK before anything goes into dist/; it also runs on its own:
+#
+#   check-apk-abi <apk> <abi>
+#
+# BUG-45: 0.4.3 and 0.4.4 built the wear APK for arm64-v8a only. The Galaxy
+# Watch 8 (Wear OS 6) runs 32-bit apps only and reports armeabi-v7a, armeabi,
+# so Android there would refuse that APK (INSTALL_FAILED_NO_MATCHING_ABIS),
+# and the phone, which checks the watch's ABIs first, never sent it. The wear
+# APK must carry armeabi-v7a, the phone APK arm64-v8a.
+#
+# Everything goes to stderr: in-container captures the stdout of its checks.
+set -euo pipefail
+
+die() { echo "check-apk-abi: $*" >&2; exit 1; }
+
+[[ $# -eq 2 ]] || die "usage: check-apk-abi <apk> <abi>"
+apk=$1
+abi=$2
+[[ $abi =~ ^[a-z0-9_-]+$ ]] || die "'$abi' is not an ABI name"
+[[ -f $apk ]] || die "$apk does not exist"
+command -v unzip > /dev/null || die "unzip is required"
+
+# The listing in full first: grep -q on a pipe would close it early, and with
+# pipefail unzip's broken pipe would fail the check even when the entry is there.
+entries=$(unzip -Z1 "$apk") || die "could not list $apk"
+carried=$(sed -n 's|^lib/\([^/]*\)/[^/]*\.so$|\1|p' <<< "$entries" | sort -u | paste -sd, -)
+
+if ! grep -qE "^lib/$abi/[^/]+\.so$" <<< "$entries"; then
+  die "$apk has no native code for $abi (it carries: ${carried:-none}); it must carry lib/$abi/ (BUG-45: the wear APK needs armeabi-v7a, as the Galaxy Watch 8 runs 32-bit apps only; the phone APK needs arm64-v8a)"
+fi
+echo "check-apk-abi: $apk carries native code for ${carried//,/, } (needs $abi): OK" >&2

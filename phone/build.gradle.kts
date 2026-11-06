@@ -17,6 +17,7 @@ android {
         // versionCode/versionName come from version.properties (root build.gradle.kts).
 
         // Embedded Cronet ships native code per ABI (~7 MB each); the phone is arm64.
+        // tools/builder/in-container fails a release without lib/arm64-v8a/ (BUG-45).
         ndk { abiFilters += "arm64-v8a" }
     }
 
