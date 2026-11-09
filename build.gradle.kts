@@ -35,7 +35,9 @@ val appVersionCode: Int = versionProperties.getProperty("versionCode")?.toIntOrN
 // LIFEOS_KEYSTORE_PROPERTIES names a properties file with storeFile (relative
 // to that file), storeType, storePassword, keyAlias and keyPassword;
 // tools/build mounts it read-only. Without it, compiling and unit tests work,
-// but packaging an APK fails before any task runs.
+// but packaging an APK fails before any task runs, unless
+// -Plifeos.unsignedApks=true (CI) asks for unsigned APKs, which Android
+// refuses to install.
 
 class ReleaseSigning(val storeFile: File, val storeType: String, val storePassword: String, val keyAlias: String, val keyPassword: String)
 
@@ -84,7 +86,14 @@ subprojects {
     }
 }
 
-if (releaseSigning == null) {
+// CI (.github/workflows/ci.yml, tools/build ci) builds the APKs without the
+// key: -Plifeos.unsignedApks=true lets packaging run with no signing config at
+// all, so the APKs come out unsigned (<module>-release-unsigned.apk). Android
+// refuses to install an unsigned APK, so whatever can be installed still
+// carries the release key.
+val unsignedApks = providers.gradleProperty("lifeos.unsignedApks").orNull == "true"
+
+if (releaseSigning == null && !unsignedApks) {
     val packagingTask = Regex("""^(package|bundle)(Debug|Release)$""")
     gradle.taskGraph.whenReady {
         val packaging = allTasks.filter { packagingTask.matches(it.name) }.map { it.path }
