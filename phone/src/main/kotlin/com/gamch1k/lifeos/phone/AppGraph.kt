@@ -136,7 +136,7 @@ class AppGraph(private val app: Application) {
         )
     }
 
-    /** A token was saved (onboarding, Change token, the 0.1 migration). */
+    /** A server and token were saved (onboarding, Edit connection, the 0.1 migration). */
     fun tokenSaved() {
         credentialsChanged()
         scope.launch {

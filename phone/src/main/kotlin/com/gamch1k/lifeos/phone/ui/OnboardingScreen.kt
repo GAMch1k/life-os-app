@@ -67,7 +67,11 @@ data class OnboardingState(
     val saving: Boolean = false,
 )
 
-/** P18-03: the server address and the Cloudflare Access service token. */
+/**
+ * P18-03: the server address and the Cloudflare Access service token, at the
+ * first run and from Settings › Edit connection. Another server needs its own
+ * token; the watch follows the saved server.
+ */
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application.graph
     private val state = MutableStateFlow(OnboardingState())
@@ -154,7 +158,7 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
     var showHelp by rememberSaveable { mutableStateOf(firstRun) }
     val testedCurrent = viewModel.testedCurrent
 
-    Scaffold(topBar = { if (!firstRun) BackTopBar("Service token", navigator::back) }) { padding ->
+    Scaffold(topBar = { if (!firstRun) BackTopBar("Connection", navigator::back) }) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -177,6 +181,7 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 value = state.server,
                 onValueChange = { viewModel.edit(server = it) },
                 label = { Text("Server") },
+                supportingText = { Text("The official server is ${ServerUrl.DEFAULT}; your own Life OS works too.") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),

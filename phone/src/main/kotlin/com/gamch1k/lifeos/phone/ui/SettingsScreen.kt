@@ -147,7 +147,7 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                 Text("Client ID: ${state.clientId ?: "none"}", style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = viewModel::testConnection, enabled = !state.testing) { Text("Test connection") }
-                    TextButton(onClick = { navigator.go(Screen.Onboarding(firstRun = false)) }) { Text("Change token") }
+                    TextButton(onClick = { navigator.go(Screen.Onboarding(firstRun = false)) }) { Text("Edit connection") }
                     if (state.testing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 }
                 state.testResult?.let {
