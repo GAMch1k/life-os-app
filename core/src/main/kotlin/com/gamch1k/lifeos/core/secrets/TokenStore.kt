@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.gamch1k.lifeos.core.api.Connection
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.wearlink.WearCredentials
 import com.gamch1k.lifeos.core.wearlink.WearTokenSource
 import kotlinx.coroutines.flow.Flow
@@ -60,7 +61,8 @@ class ServiceToken(val clientId: String, val clientSecret: String) {
 
 /** The Life OS server address the owner types: always https, no trailing slash. */
 object ServerUrl {
-    const val DEFAULT = "https://lifeos.gamch1k.com"
+    /** The build's server (`lifeos.serverUrl`): offered at onboarding, used until one is saved. */
+    val DEFAULT: String = LifeOsEndpoints.SERVER_URL
 
     /** `lifeos.example.com` → `https://lifeos.example.com`; null for anything that is not an https URL with a host. */
     fun normalize(input: String): String? {

@@ -28,6 +28,39 @@ val appVersionCode: Int = versionProperties.getProperty("versionCode")?.toIntOrN
     ?.takeIf { it > 0 }
     ?: throw GradleException("version.properties: versionCode must be a positive integer")
 
+// ---- Servers: where the apps go (lifeos.serverUrl, lifeos.updatesUrl)
+//
+// Two build settings, compiled into core's BuildConfig, which both apps read
+// through core/…/config/LifeOsEndpoints.kt. Each is a Gradle property, else an
+// environment variable, else the official Life OS server:
+//
+//   lifeos.serverUrl   LIFE_OS_PUBLIC_URL   the server the phone offers at
+//                                           onboarding; the owner may change
+//                                           it in the app at any time
+//   lifeos.updatesUrl  LIFE_OS_UPDATES_URL  where the phone and the watch get
+//                                           app updates, whatever server the
+//                                           owner chose
+//
+// Each must be an https:// origin: a host and perhaps a port, nothing after it.
+
+val officialServerUrl = "https://lifeos.gamch1k.com"
+
+fun originSetting(property: String, variable: String): String {
+    val value = listOf(providers.gradleProperty(property), providers.environmentVariable(variable))
+        .firstNotNullOfOrNull { setting -> setting.orNull?.trim()?.takeIf { it.isNotEmpty() } }
+        ?: return officialServerUrl
+    return value.trimEnd('/')
+        .takeIf { Regex("""https://[a-z0-9.-]+(:[0-9]{1,5})?""", RegexOption.IGNORE_CASE).matches(it) }
+        ?.lowercase()
+        ?: throw GradleException(
+            "$property ($variable) must be an https:// origin such as $officialServerUrl: " +
+                "a host and perhaps a port, no path, query or user name",
+        )
+}
+
+val lifeosServerUrl: String by extra(originSetting("lifeos.serverUrl", "LIFE_OS_PUBLIC_URL"))
+val lifeosUpdatesUrl: String by extra(originSetting("lifeos.updatesUrl", "LIFE_OS_UPDATES_URL"))
+
 // ---- Release signing
 //
 // Every APK that is ever installed (release and debug alike) is signed with

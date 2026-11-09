@@ -16,12 +16,14 @@ import java.util.concurrent.Executors
  *
  * Runs the probes one after another, so their timings do not disturb each
  * other, each with a fresh Cronet engine (cold DNS cache, new connections).
+ * They go to the owner's server, the one the token belongs to.
  */
 class NetworkCheck(context: Context) {
     private val context = context.applicationContext
 
-    suspend fun run(appVersion: String, quicAllowed: Boolean, token: ServiceToken?): NetworkCheckResult =
+    suspend fun run(server: String, appVersion: String, quicAllowed: Boolean, token: ServiceToken?): NetworkCheckResult =
         withContext(Dispatchers.IO) {
+            val traceUrl = LifeOsEndpoints.traceUrl(server)
             val executor = Executors.newSingleThreadExecutor()
             try {
                 val startedAt = ZonedDateTime.now()
@@ -30,14 +32,14 @@ class NetworkCheck(context: Context) {
                 // 1 and 4: embedded Cronet, then the service-token request on the same engine.
                 var authenticated: HttpProbeResult? = null
                 val cronetLabel = "Cronet ${embeddedVersion ?: "?"}, embedded, built-in DNS"
-                val cronet = withEngine(CronetEngines.Provider.EMBEDDED, quicAllowed, cronetLabel) { engine ->
-                    val trace = CronetProbe.get(engine, executor, cronetLabel, LifeOsEndpoints.TRACE_URL, parseTrace = true)
+                val cronet = withEngine(CronetEngines.Provider.EMBEDDED, quicAllowed, cronetLabel, traceUrl) { engine ->
+                    val trace = CronetProbe.get(engine, executor, cronetLabel, traceUrl, parseTrace = true)
                     if (token != null) {
                         authenticated = CronetProbe.get(
                             engine,
                             executor,
                             "Service token request",
-                            LifeOsEndpoints.TASKS_PROBE_URL,
+                            LifeOsEndpoints.tasksProbeUrl(server),
                             headers = mapOf(
                                 "CF-Access-Client-Id" to token.clientId,
                                 "CF-Access-Client-Secret" to token.clientSecret,
@@ -47,25 +49,25 @@ class NetworkCheck(context: Context) {
                         )
                     }
                     trace
-                } ?: unavailable(cronetLabel)
+                } ?: unavailable(cronetLabel, traceUrl)
 
                 // Extra: Android's own Cronet, when the device has it.
                 val httpEngineVersion = CronetEngines.provider(context, CronetEngines.Provider.HTTP_ENGINE)?.version
                 val httpEngine = httpEngineVersion?.let { version ->
                     val label = "HttpEngine $version, Android's own Cronet, built-in DNS (extra)"
-                    withEngine(CronetEngines.Provider.HTTP_ENGINE, quicAllowed, label) { engine ->
-                        CronetProbe.get(engine, executor, label, LifeOsEndpoints.TRACE_URL, parseTrace = true)
+                    withEngine(CronetEngines.Provider.HTTP_ENGINE, quicAllowed, label, traceUrl) { engine ->
+                        CronetProbe.get(engine, executor, label, traceUrl, parseTrace = true)
                     }
                 }
 
                 // 2: the platform stack, which sends the hostname in clear.
-                val platform = PlatformHttpProbe.get(LifeOsEndpoints.TRACE_URL)
+                val platform = PlatformHttpProbe.get(traceUrl)
 
                 // 3: device facts and the HTTPS record as the system resolver sees it.
                 val device = DeviceFactsCollector.collect(context, embeddedVersion)
                 val dns = SystemDnsProbe.httpsRecord(
                     DeviceFactsCollector.activeNetwork(context),
-                    LifeOsEndpoints.HOST,
+                    LifeOsEndpoints.host(server),
                     executor,
                 )
 
@@ -94,24 +96,25 @@ class NetworkCheck(context: Context) {
         provider: CronetEngines.Provider,
         quicAllowed: Boolean,
         label: String,
+        traceUrl: String,
         block: suspend (CronetEngine) -> HttpProbeResult,
     ): HttpProbeResult? {
         val engine = try {
             CronetEngines.build(context, provider, quicAllowed) ?: return null
         } catch (error: RuntimeException) {
-            return unavailable(label, "could not start: ${error.javaClass.simpleName}: ${error.message}")
+            return unavailable(label, traceUrl, "could not start: ${error.javaClass.simpleName}: ${error.message}")
         }
         return try {
             block(engine)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: RuntimeException) {
-            unavailable(label, "failed: ${error.javaClass.simpleName}: ${error.message}")
+            unavailable(label, traceUrl, "failed: ${error.javaClass.simpleName}: ${error.message}")
         } finally {
             runCatching { engine.shutdown() }
         }
     }
 
-    private fun unavailable(label: String, why: String = "provider not available") =
-        HttpProbeResult(label, LifeOsEndpoints.TRACE_URL, null, null, 0, null, null, null, why)
+    private fun unavailable(label: String, traceUrl: String, why: String = "provider not available") =
+        HttpProbeResult(label, traceUrl, null, null, 0, null, null, null, why)
 }

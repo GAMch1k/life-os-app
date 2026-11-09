@@ -76,7 +76,7 @@ class TokenStoreTest {
 
     @Test
     fun `the default server is used until one is saved`() = runBlocking {
-        assertEquals("https://lifeos.gamch1k.com", TokenStore(stores.create(), FakeCipher()).serverUrl())
+        assertEquals(ServerUrl.DEFAULT, TokenStore(stores.create(), FakeCipher()).serverUrl())
     }
 
     @Test
