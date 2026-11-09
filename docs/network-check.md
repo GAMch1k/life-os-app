@@ -8,7 +8,7 @@ The owner's work Wi-Fi resets every TLS handshake that carries `lifeos.gamch1k.c
 
 ## Using it
 
-1. Open it from **Settings → Network check**. It uses the service token the app already holds (entered at the first run, or under Settings → **Change token**) and says so at the bottom of the screen, with the masked Client ID; without one, step 4 is skipped. The screen itself has no token fields since 0.2.0.
+1. Open it from **Settings → Network check**. It uses the service token the app already holds (entered at the first run, or under Settings → **Edit connection**) and says so at the bottom of the screen, with the masked Client ID; without one, step 4 is skipped. The screen itself has no token fields since 0.2.0.
 2. Tap **Run check**. It takes a few seconds; every probe uses a fresh connection.
 3. Read the **Result** card, then tap **Copy report** and paste the text wherever it is needed. The report never contains the token or the phone's public IP.
 
@@ -26,7 +26,7 @@ When the result isn't GO, hints follow. The most likely cause is **Private DNS**
 
 ### 1. Cronet, embedded, built-in DNS
 
-A GET to `https://lifeos.gamch1k.com/cdn-cgi/trace`. Cloudflare's edge answers it itself, without an Access login, and reports what it saw:
+A GET to `/cdn-cgi/trace` on the server the app is set to (by default `https://lifeos.gamch1k.com/cdn-cgi/trace`); every probe goes to that server, the one the token belongs to. Cloudflare's edge answers it itself, without an Access login, and reports what it saw:
 
 | Line | Meaning |
 |---|---|
@@ -59,14 +59,14 @@ The same GET through Android's built-in Cronet (`android.net.http.HttpEngine`, p
 
 ### 3b. DNS HTTPS record via the system resolver
 
-This asks the phone's normal resolver, which honours Private DNS, for the `HTTPS` record of `lifeos.gamch1k.com`. Expect `alpn=h3,h2  ech=yes (… bytes, public name cloudflare-ech.com)`.
+This asks the phone's normal resolver, which honours Private DNS, for the `HTTPS` record of the server's hostname (`lifeos.gamch1k.com` by default). Expect `alpn=h3,h2  ech=yes (… bytes, public name cloudflare-ech.com)`.
 
 - `ech=no` or no record: this network's DNS strips HTTPS records, so ECH can't work here.
 - `ech=yes` while Cronet still says plaintext: the key exists, but Cronet didn't use it. Run the check again; see the hints on the screen.
 
 ### 4. Service token request
 
-With a token in the app, this sends `GET https://lifeos.gamch1k.com/api/tasks/v1/tasks?limit=1` through the same Cronet engine, with the headers `CF-Access-Client-Id`, `CF-Access-Client-Secret` and `X-Life-OS-Actor: user`. Redirects are not followed.
+With a token in the app, this sends `GET <server>/api/tasks/v1/tasks?limit=1` to the server the app is set to, through the same Cronet engine, with the headers `CF-Access-Client-Id`, `CF-Access-Client-Secret` and `X-Life-OS-Actor: user`. Redirects are not followed.
 
 | Status | Meaning |
 |---|---|

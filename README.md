@@ -50,6 +50,21 @@ What `tools/build` does:
 
   Measured on a cold release build without the build cache: 473 s and a peak process memory of 1564 MiB (cgroup peak 2076 MiB) with these settings, against 562 s and 2668 MiB (cgroup peak 3036 MiB) with 0.3.0's (one invocation, two workers, the parallel collector). R8 is most of the time (about 150 s for the phone, 135 s for the wear app). The configuration cache stays off: it would store the signing configuration, passwords included, in `.gradle/configuration-cache` (encrypted, with the key in the Gradle volume), and a release's changed `version.properties` would invalidate it anyway.
 
+## Servers: official default, your own, and updates
+
+The apps talk to one Life OS server and get their updates from one place.
+
+- **The server.** At the first run the phone offers the official server, `https://lifeos.gamch1k.com`. It is not forced: type your own Life OS's address instead, or change it later under **Settings › Connection › Edit connection**. A new server needs its own service token, because the token belongs to that server's Cloudflare Access. The watch has no server setting: it takes the server and the token from the phone, and follows a change at once. The network check and the Dashboard links use the server set in the app.
+- **Updates** always come from the official domain, whatever server is set in the app. The phone's manifest (`/android/updates`) and APKs and the watch's own Wi-Fi download all use the update origin. The service token goes along only when the server set in the app *is* the update origin; a token for another server is never sent there. With another server, the update requests carry no token, so they work only where the update origin lets `/android/` through without one.
+- **Building your own app.** Two build settings decide what is compiled in. They live in core's `BuildConfig` and are read through `core/…/config/LifeOsEndpoints.kt`, so the phone and the watch app always agree:
+
+  | Gradle property | Environment variable | Default | What |
+  |---|---|---|---|
+  | `lifeos.serverUrl` | `LIFE_OS_PUBLIC_URL` | `https://lifeos.gamch1k.com` | The server the phone offers at the first run. |
+  | `lifeos.updatesUrl` | `LIFE_OS_UPDATES_URL` | `https://lifeos.gamch1k.com` | Where both apps get updates. If you sign with your own key, point it at your own server: Android installs an update only when the installed app's key signed it. |
+
+  Each must be an https:// origin: a host and perhaps a port, no path. The Gradle property wins over the environment variable. Set them with `-P` (`./gradlew -Plifeos.serverUrl=https://lifeos.example.com …`, or `tools/build gradle -Plifeos.serverUrl=… :phone:assembleRelease`), in Gradle's environment, or in a `gradle.properties`. `tools/build` passes no environment variables into its container, so its own builds always use the defaults unless a `gradle.properties` says otherwise.
+
 ## Signing
 
 Every APK that is ever installed is signed with the **release key**, including dev builds. That way updates never break, and the phone and the watch always pair.
@@ -130,14 +145,14 @@ To release:
 
 ### First run
 
-The app asks for the server (default `https://lifeos.gamch1k.com`) and a Cloudflare Access **service token** made for this phone, with "How to get a token" steps built in:
+The app asks for the server (the official `https://lifeos.gamch1k.com`, or your own Life OS: [Servers](#servers-official-default-your-own-and-updates)) and a Cloudflare Access **service token** made for this phone, with "How to get a token" steps built in:
 
 1. Cloudflare dashboard → Zero Trust → **Access controls → Service credentials → Service Tokens → Create Service Token**. Name it `life-os-phone`, pick a duration, **Generate token**, and copy the Client ID (it ends in `.access`) and the Client Secret, which Cloudflare shows only once.
 2. **Access controls → Policies → Add a policy**: Action **Service Auth**, Include → **Service Token** → `life-os-phone`, **Save**.
 3. **Access controls → Applications → Life OS → Configure → Policies → Select existing policies**, tick the new policy, **Confirm**, **Save**. Service Auth policies are evaluated before the owner's Allow policy, which keeps working.
 4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`) and, when Life OS answers, saves it and opens Today.
 
-To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) removes the token, the cached Today and the queue from the phone.
+To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) removes the token, the cached Today and the queue from the phone. To switch servers or tokens later: **Settings › Connection › Edit connection**.
 
 ### How it talks to Life OS
 
@@ -163,7 +178,7 @@ Voice, Photo and Text go into a queue (`core/…/capture`) that a WorkManager jo
 
 ### Updates (P18-09)
 
-The app reads `/android/updates` (the contract is `docs/operations/android-releases.md` in the life-os repository) when it starts (at most every 6 hours; it only shows a banner), once a day on an unmetered network (`UpdateWorker`: downloads, and installs at once when the app is not on screen), and on **Settings → Check for updates** (downloads and installs). It takes `apps.phone` only when its `versionCode` is higher than its own and the phone's API level reaches `minSdk`; it downloads through the authenticated client (resuming a partial file), refuses a file whose size or SHA-256 differs, checks that the archive is this package at that version, and installs it with a `PackageInstaller` session and `USER_ACTION_NOT_REQUIRED`. Android asks once, on the first self-update after a browser install (your browser is then the installer of record): the app opens the confirmation, or offers it on Home. Once Life OS installed the current version, later updates are silent. Without **Install unknown apps** for Life OS it leads to that setting. After a restart on a new version, Home says "Updated to x.y".
+The app reads `/android/updates` on the update origin, the official domain whatever server is set ([Servers](#servers-official-default-your-own-and-updates)); the contract is `docs/operations/android-releases.md` in the life-os repository. It checks when it starts (at most every 6 hours; it only shows a banner), once a day on an unmetered network (`UpdateWorker`: downloads, and installs at once when the app is not on screen), and on **Settings → Check for updates** (downloads and installs). It takes `apps.phone` only when its `versionCode` is higher than its own and the phone's API level reaches `minSdk`; it downloads through the client (resuming a partial file), refuses a file whose size or SHA-256 differs, checks that the archive is this package at that version, and installs it with a `PackageInstaller` session and `USER_ACTION_NOT_REQUIRED`. Android asks once, on the first self-update after a browser install (your browser is then the installer of record): the app opens the confirmation, or offers it on Home. Once Life OS installed the current version, later updates are silent. Without **Install unknown apps** for Life OS it leads to that setting. After a restart on a new version, Home says "Updated to x.y".
 
 ### The watch app: setup and updates (P19-06, 0.4.0)
 
@@ -171,7 +186,7 @@ The app reads `/android/updates` (the contract is `docs/operations/android-relea
 
 - **Set up the watch app** installs the watch app once, without Play and without a computer: the phone downloads and checks the newest `apps.wear`, pairs with the watch's Wireless debugging (the code and IP:port the watch shows), finds the connection port over mDNS or asks for it, installs the APK, allows "Install unknown apps" for Life OS on the watch (`appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow`), and checks that the watch app answers over the Data Layer. Then Wireless debugging goes off again. The phone's ADB key stays, encrypted with a Keystore key, for a later rescue without a new pairing.
 - **Updates**: the phone asks the watch its version over the Data Layer; when Life OS publishes a newer `apps.wear`, it downloads and checks it (size, SHA-256, package, version, the release key), offers it, and streams it through a channel. The watch checks it again and installs it itself, silently (`USER_ACTION_NOT_REQUIRED`), and reports the result on its next start. Daily on Wi-Fi, when the app opens (at most every 6 hours), when the watch reports in, and on Update now; with backoff, a battery rule and Android's 30 seconds between installs.
-- **Since 0.4.3** (transfer v2): a 0.4.3 watch first downloads the APK itself from Life OS over a Wi-Fi network it asks Android for, with its own token, while the phone follows; without Wi-Fi within 45 s, or when that download fails, the phone streams it, from the bytes the watch already holds, and a broken stream resumes (up to 4 times per push). Both sides run the update in a foreground service with a wake lock and a progress notification; the phone has no fixed time limit any more (0.4.2's 15 minutes cut the 16.6 MB APK at 91–95 % over Bluetooth), only 2 minutes without a byte. Settings › Watch shows the route, percentage, speed and time left, with **Cancel**; the watch shows the same on Connection. A 0.4.1 or 0.4.2 watch still gets the whole APK in one stream (v1). Tip: set the watch's Wi-Fi to **Auto** and save your network on it.
+- **Since 0.4.3** (transfer v2): a 0.4.3 watch first downloads the APK itself from the update origin over a Wi-Fi network it asks Android for, while the phone follows; without Wi-Fi within 45 s, or when that download fails, the phone streams it, from the bytes the watch already holds, and a broken stream resumes (up to 4 times per push). Both sides run the update in a foreground service with a wake lock and a progress notification; the phone has no fixed time limit any more (0.4.2's 15 minutes cut the 16.6 MB APK at 91–95 % over Bluetooth), only 2 minutes without a byte. Settings › Watch shows the route, percentage, speed and time left, with **Cancel**; the watch shows the same on Connection. A 0.4.1 or 0.4.2 watch still gets the whole APK in one stream (v1). Tip: set the watch's Wi-Fi to **Auto** and save your network on it.
 - **BUG-45** (fixed in 0.4.5): 0.4.3 and 0.4.4 never reached the Galaxy Watch 8. Their wear APK carried native code for `arm64-v8a` only, on the wrong belief that the watch runs a 64-bit user space; it runs 32-bit apps only and reports `armeabi-v7a, armeabi`, so Android there would refuse the APK (`INSTALL_FAILED_NO_MATCHING_ABIS`), and the phone, which compares the watch's ABIs with the APK's before it sends, refused to send it (Settings › Watch said so). Since 0.4.5 the wear APK carries `armeabi-v7a` only (5.9 MB), and the release build fails when the wear APK lacks `lib/armeabi-v7a/` or the phone APK `lib/arm64-v8a/`. The phone judges by the ABIs it was built with, so a 0.4.4 phone still refuses the 0.4.5 watch app: the phone updates itself to 0.4.5 first, then sends it on its next check or on **Update now**. A 0.4.2 watch gets it in one v1 stream, about 6 minutes over Bluetooth.
 
 The steps, the protocol and the failure modes are in [docs/wear.md](docs/wear.md#install-and-updates).
