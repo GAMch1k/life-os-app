@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.core.api
 
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -293,13 +294,52 @@ class LifeOsClientTest {
         assertEquals(1, transport.requests.size)
     }
 
+    private val manifestJson = """{"formatVersion":1,"updatedAt":"2026-10-12T14:03:00Z","apps":{"phone":{"versionCode":3,"versionName":"0.3.0","minSdk":34,"sha256":"${"0".repeat(64)}","size":10,"url":"/android/lifeos-phone-0.3.0-3.apk","previous":[]}}}"""
+
     @Test
     fun `the update manifest is read from android updates`() = runBlocking {
-        transport.json(200, """{"formatVersion":1,"updatedAt":"2026-10-12T14:03:00Z","apps":{"phone":{"versionCode":3,"versionName":"0.3.0","minSdk":34,"sha256":"${"0".repeat(64)}","size":10,"url":"/android/lifeos-phone-0.3.0-3.apk","previous":[]}}}""")
+        transport.json(200, manifestJson)
         val manifest = client.updateManifest()
         assertEquals(3L, manifest.apps.phone!!.versionCode)
         assertNull(manifest.apps.wear)
-        assertEquals("https://lifeos.example.com/android/updates", transport.requests.single().url)
+        val request = transport.requests.single()
+        assertEquals("https://lifeos.example.com/android/updates", request.url)
+        assertEquals("the update origin is the owner's server: the token goes along", FakeTransport.TOKEN.clientId, request.headers["CF-Access-Client-Id"])
+    }
+
+    @Test
+    fun `switching servers never switches the update source, and the other server's token stays with it`() = runBlocking {
+        var server = "https://lifeos.example.com"
+        val client = LifeOsClient(transport, { Connection(server, FakeTransport.TOKEN) }, "ua", updatesUrl = "https://lifeos.example.com", sleep = {})
+        transport.json(200, manifestJson)
+        client.updateManifest()
+
+        // Settings › Change server or token: the owner's own server.
+        server = "https://my-own.example.org"
+        transport.json(200, manifestJson).json(200, "apk").json(200, """{"items":[]}""")
+        client.updateManifest()
+        client.download("/android/lifeos-phone-0.3.0-3.apk", { _, _ -> java.io.ByteArrayOutputStream() })
+        client.openTasksDueBefore(Instant.EPOCH)
+
+        val (before, after, apk, tasks) = transport.requests
+        assertEquals("https://lifeos.example.com/android/updates", before.url)
+        assertEquals(before.url, after.url)
+        assertEquals("https://lifeos.example.com/android/lifeos-phone-0.3.0-3.apk", apk.url)
+        for (update in listOf(after, apk)) {
+            assertNull(update.headers["CF-Access-Client-Id"])
+            assertNull(update.headers["CF-Access-Client-Secret"])
+            assertNull(update.headers["X-Life-OS-Actor"])
+        }
+        assertTrue("everything else goes to the new server", tasks.url.startsWith("https://my-own.example.org/api/tasks/v1/tasks?"))
+        assertEquals(FakeTransport.TOKEN.clientId, tasks.headers["CF-Access-Client-Id"])
+    }
+
+    @Test
+    fun `by default updates come from the build's update origin, not from the server`() = runBlocking {
+        val client = LifeOsClient(transport, { Connection("https://my-own.example.org", FakeTransport.TOKEN) }, "ua", sleep = {})
+        transport.json(200, manifestJson)
+        client.updateManifest()
+        assertEquals(LifeOsEndpoints.UPDATES_URL + "/android/updates", transport.requests.single().url)
     }
 
     @Test

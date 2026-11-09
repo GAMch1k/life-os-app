@@ -17,6 +17,7 @@ import com.gamch1k.lifeos.core.api.AppRelease
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.api.LifeOsJson
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.update.UpdateDecision
 import com.gamch1k.lifeos.core.update.UpdatePolicy
 import com.gamch1k.lifeos.phone.BuildConfig
@@ -53,7 +54,8 @@ sealed interface UpdateState {
  * Self-update from Life OS (P18-09), by the contract in the life-os
  * repository's docs/operations/android-releases.md: read `/android/updates`,
  * take `apps.phone` only if its versionCode is higher, download it through
- * the authenticated client, check size and SHA-256, check that the archive is
+ * the client, both from the update origin (`lifeos.updatesUrl`, whatever
+ * server the owner chose), check size and SHA-256, check that the archive is
  * this app at that version, and hand it to PackageInstaller with
  * USER_ACTION_NOT_REQUIRED. Android then installs it only if the release key
  * signed it. It asks the owner to confirm once, on the first self-update
@@ -119,7 +121,7 @@ class UpdateManager(
                 null,
             )
             is UpdateDecision.UnsupportedFormat -> stateFlow.value = UpdateState.Failed(
-                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version by hand from the server's /android/ page.",
+                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version by hand from ${LifeOsEndpoints.UPDATES_URL}/android/.",
                 null,
             )
             is UpdateDecision.Invalid -> stateFlow.value = UpdateState.Failed("The published update is unusable: ${decision.reason}.", null)

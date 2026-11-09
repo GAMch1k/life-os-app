@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.wear.update
 
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.update.PartialApk
 import com.gamch1k.lifeos.core.wearlink.WearCredentials
 import kotlinx.coroutines.runBlocking
@@ -92,7 +93,9 @@ class DirectDownloadTest {
         }
     }
 
-    private fun download(networks: WifiNetworks, http: ApkHttp) = DirectDownload(networks, http, userAgent = "LifeOS-Wear/test", wifiTimeoutMillis = 45_000)
+    /** The update origin is the watch's server here, as for the owner ("The update origin" below covers the rest). */
+    private fun download(networks: WifiNetworks, http: ApkHttp) =
+        DirectDownload(networks, http, userAgent = "LifeOS-Wear/test", updatesUrl = "https://lifeos.example.com", wifiTimeoutMillis = 45_000)
 
     private class Seen {
         val stages = mutableListOf<Pair<DirectDownload.Stage, Long>>()
@@ -169,6 +172,30 @@ class DirectDownloadTest {
         assertEquals(1, networks.closed)
         assertEquals(listOf(DirectDownload.Stage.WAITING_FOR_WIFI to 0L, DirectDownload.Stage.DOWNLOADING to 0L), seen.stages)
         assertEquals(size, seen.positions.last())
+    }
+
+    // ---- The update origin
+
+    @Test
+    fun `the APK comes from the update origin whatever server the watch uses, and that server's token stays home`() {
+        val http = FakeHttp()
+        val partial = partial()
+        val ownServer = WearCredentials("https://my-own.example.org", "own.access", "own-secret")
+        assertEquals(DirectDownload.Outcome.Downloaded, fetch(download(FakeNetworks(), http), partial, credentials = ownServer))
+        assertArrayEquals(apk, taken(partial))
+        val (requested, headers) = http.requests.single()
+        assertEquals("https://lifeos.example.com/android/lifeos-wear-0.4.3-10.apk", requested)
+        assertNull(headers["CF-Access-Client-Id"])
+        assertNull(headers["CF-Access-Client-Secret"])
+        assertEquals("LifeOS-Wear/test", headers["User-Agent"])
+    }
+
+    @Test
+    fun `by default the watch downloads from the build's update origin, not from its server`() {
+        val http = FakeHttp()
+        val direct = DirectDownload(FakeNetworks(), http, userAgent = "LifeOS-Wear/test")
+        fetch(direct, partial(), credentials = WearCredentials("https://my-own.example.org", "own.access", "own-secret"))
+        assertEquals(LifeOsEndpoints.UPDATES_URL + url, http.requests.single().first)
     }
 
     // ---- Resuming
