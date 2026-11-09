@@ -1,0 +1,85 @@
+# CI for the phone and the watch app (X-09): the unit tests of every module,
+# both apps' release APKs built unsigned, and the release's checks that need
+# no signature, among them the native code's ABIs (BUG-45: the wear APK must
+# carry armeabi-v7a, the phone APK arm64-v8a). The work is
+# tools/builder/in-container ci, the script `tools/build ci` runs in the
+# builder container on the server.
+#
+# No secrets: the release key never leaves the server, the APKs stay unsigned
+# (Android won't install them), and nothing is uploaded or published.
+#
+# The repository is private, so every minute counts against the Free plan's
+# 2,000 a month: Markdown-only changes don't run, a newer push cancels the
+# older run of the same branch, and the Gradle cache is restored.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Tests, unsigned APKs, ABI check
+    # A pull request from a branch of this repository is already tested by
+    # that branch's push; only pull requests from forks get a run of their own.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The builder's JDK (tools/builder/Dockerfile: Temurin 21).
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The SDK platform and build-tools the builder image pins, read from its
+      # Dockerfile. The runner image usually has them; install them if not.
+      # No NDK: the apps build no native code of their own.
+      - name: Android SDK packages
+        run: |
+          platform=$(sed -n 's/^ARG SDK_PLATFORM=//p' tools/builder/Dockerfile)
+          build_tools=$(sed -n 's/^ARG SDK_BUILD_TOOLS=//p' tools/builder/Dockerfile)
+          [[ -n $platform && -n $build_tools ]] || { echo "could not read the SDK packages from tools/builder/Dockerfile" >&2; exit 1; }
+          missing=()
+          [[ -d $ANDROID_HOME/platforms/$platform ]] || missing+=("platforms;$platform")
+          [[ -d $ANDROID_HOME/build-tools/$build_tools ]] || missing+=("build-tools;$build_tools")
+          if ((${#missing[@]})); then
+            sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+            (yes || true) | "$sdkmanager" --licenses > /dev/null
+            "$sdkmanager" --install "${missing[@]}"
+          fi
+          echo "Android SDK: platforms;$platform, build-tools;$build_tools (installed now: ${missing[*]:-none})"
+
+      # Validates the Gradle wrapper and caches the Gradle user home. Only runs
+      # on main write the cache; other branches restore main's. The basic
+      # provider is the MIT-licensed one built on actions/cache.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+          add-job-summary: on-failure
+
+      - name: Unit tests, unsigned release APKs, widget and ABI checks
+        run: tools/builder/in-container ci

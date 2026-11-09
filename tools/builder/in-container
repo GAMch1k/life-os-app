@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Runs inside the builder container; start it through tools/build, not directly.
+# Runs inside the builder container; start it through tools/build, not
+# directly. The one exception is `ci`, which GitHub Actions also runs on its
+# runner (.github/workflows/ci.yml).
 #
 #   in-container test     unit tests (of the release variant)
+#   in-container ci       unit tests, unsigned release APKs, the checks that
+#                         need no signature (no signing material, no dist/)
 #   in-container release  unit tests, signed release APKs, checks, dist/
 #
 # Each step is its own Gradle invocation and prints its time and peak memory.
@@ -68,7 +72,9 @@ report_memory() {
   echo "largest processes at the process-memory peak: $(cat "$peaks.ps" 2> /dev/null)"
 }
 sampler=
-if [[ -r $cgroup/memory.stat ]]; then
+# Only in a cgroup of its own (the container): a CI runner sees the host's
+# root cgroup, which has no memory.current or memory.max.
+if [[ -r $cgroup/memory.stat && -r $cgroup/memory.current && -r $cgroup/memory.max ]]; then
   sample_memory &
   sampler=$!
   trap report_memory EXIT
@@ -79,15 +85,16 @@ fi
 # the unit tests and each app in their own JVM keeps the peak at the largest
 # step instead of everything the build ever loaded.
 step() {
-  local name=$1 start=$SECONDS step_anon=0 step_ws=0
+  local name=$1 start=$SECONDS step_anon=0 step_ws=0 memory=
   shift
   gradle "$@"
   if [[ -n $sampler ]]; then
     sleep 1
     [[ -r $peaks ]] && read -r _ _ step_anon step_ws < "$peaks"
     kill -USR1 "$sampler" 2> /dev/null || true
+    memory=", peak process memory $((step_anon / 1048576)) MiB, peak working set $((step_ws / 1048576)) MiB"
   fi
-  echo "step $name: $((SECONDS - start)) s, peak process memory $((step_anon / 1048576)) MiB, peak working set $((step_ws / 1048576)) MiB" >&2
+  echo "step $name: $((SECONDS - start)) s$memory" >&2
 }
 
 # Reads one field out of `aapt2 dump badging` output.
@@ -106,6 +113,16 @@ check_widget_classes() {
       || die "R8 renamed or merged the widget class $widget (BUG-41): keep the GlanceAppWidget classes"
   done
   echo "phone: the Glance widget classes are kept apart" >&2
+}
+
+# CI's check of an unsigned release APK: built, and carrying native code for
+# the ABI its device runs (BUG-45).
+check_unsigned() { # <module> <abi its native code must include>
+  local module=$1 abi=$2 apk
+  apk="$module/build/outputs/apk/release/$module-release-unsigned.apk"
+  [[ -f $apk ]] || die "$apk was not built"
+  tools/builder/check-apk-abi "$apk" "$abi" || die "$apk lacks native code for $abi (BUG-45)"
+  echo "$module: $apk, $(stat -c %s "$apk") bytes" >&2
 }
 
 verify_and_copy() { # <module> <abi its native code must include> -> prints the release.json entry
@@ -160,6 +177,19 @@ case "${1:-}" in
   test)
     step "unit tests" testReleaseUnitTest
     ;;
+  ci)
+    # The release's steps without signing material: the APKs come out
+    # unsigned (-Plifeos.unsignedApks=true, see build.gradle.kts), so the
+    # checks are the ones that need no signature: the widget classes (BUG-41)
+    # and the native code's ABIs (BUG-45). Nothing goes into dist/.
+    [[ -z ${LIFEOS_KEYSTORE_PROPERTIES:-} ]] || die "ci builds without signing material; unset LIFEOS_KEYSTORE_PROPERTIES"
+    step "unit tests" testReleaseUnitTest
+    step phone --max-workers=1 -Plifeos.unsignedApks=true :phone:assembleRelease
+    check_widget_classes
+    step wear --max-workers=1 -Plifeos.unsignedApks=true :wear:assembleRelease
+    check_unsigned phone arm64-v8a
+    check_unsigned wear armeabi-v7a
+    ;;
   release)
     [[ -n ${LIFEOS_KEYSTORE_PROPERTIES:-} ]] || die "LIFEOS_KEYSTORE_PROPERTIES is not set"
     # The unit tests run against the release variant, as in `test`: its
@@ -180,6 +210,6 @@ case "${1:-}" in
     ls -l dist >&2
     ;;
   *)
-    die "usage: in-container test|release"
+    die "usage: in-container test|ci|release"
     ;;
 esac

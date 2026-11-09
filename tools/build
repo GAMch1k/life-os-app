@@ -5,6 +5,9 @@
 #                               phone and wear apps, signature and package
 #                               checks, then dist/ with the APKs and release.json
 #   tools/build test            unit tests only; no signing material is mounted
+#   tools/build ci              what CI (.github/workflows/ci.yml) runs: unit
+#                               tests, unsigned release APKs, the widget and
+#                               ABI checks; no signing material is mounted
 #   tools/build gradle ARGS...  any Gradle invocation in the builder, with the
 #                               signing directory mounted (for debugging)
 #   tools/build image           only build (or reuse) the builder image
@@ -32,11 +35,11 @@ image="$image_repo:$(sha256sum "$repo/tools/builder/Dockerfile" | cut -c1-12)"
 die() { echo "tools/build: $*" >&2; exit 1; }
 log() { echo "tools/build: $*" >&2; }
 
-usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 mode=${1:-release}
 case "$mode" in
-  release | test | image) [[ $# -le 1 ]] || { usage; exit 2; } ;;
+  release | test | ci | image) [[ $# -le 1 ]] || { usage; exit 2; } ;;
   gradle) shift; [[ $# -ge 1 ]] || { usage; exit 2; } ;;
   -h | --help | help) usage; exit 0 ;;
   *) usage; exit 2 ;;
@@ -111,6 +114,7 @@ ensure_image
 case "$mode" in
   image) ;;
   test) run_builder no tools/builder/in-container test ;;
+  ci) run_builder no tools/builder/in-container ci ;;
   release) run_builder yes tools/builder/in-container release ;;
   gradle) run_builder yes ./gradlew "$@" ;;
 esac
