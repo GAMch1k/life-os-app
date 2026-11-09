@@ -82,9 +82,9 @@ class LifeOsClientTest {
 
     @Test
     fun `a redirect to the Access login is an Access redirect, never retried`() {
-        transport.redirect(302, "https://damp-surf-d6be.cloudflareaccess.com/cdn-cgi/access/login/lifeos.gamch1k.com?kid=x")
+        transport.redirect(302, "https://example-team.cloudflareaccess.com/cdn-cgi/access/login/lifeos.example.com?kid=x")
         val error = expect<LifeOsException.AccessRedirect> { client.openTasksDueBefore(Instant.EPOCH) }
-        assertEquals("damp-surf-d6be.cloudflareaccess.com", error.host)
+        assertEquals("example-team.cloudflareaccess.com", error.host)
         assertTrue(error.authProblem)
         assertFalse(error.retryable)
         assertEquals(1, transport.requests.size)

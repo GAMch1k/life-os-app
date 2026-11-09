@@ -55,7 +55,7 @@ class PushPayloadTest {
         assertEquals(id, PushPayloads.taskIdFromLink("/tasks?id=${id.uppercase()}"))
         assertEquals(id, PushPayloads.taskIdFromLink("/tasks#$id"))
         assertEquals(id, PushPayloads.taskIdFromLink("/tasks#task-$id"))
-        assertEquals(id, PushPayloads.taskIdFromLink("https://lifeos.gamch1k.com/tasks/$id"))
+        assertEquals(id, PushPayloads.taskIdFromLink("https://lifeos.example.com/tasks/$id"))
         assertEquals(id, PushPayloads.taskIdFromLink("/tasks?task=${id.replace("-", "%2D")}"))
     }
 

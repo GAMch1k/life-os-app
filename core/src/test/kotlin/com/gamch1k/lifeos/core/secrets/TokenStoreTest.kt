@@ -81,10 +81,10 @@ class TokenStoreTest {
 
     @Test
     fun `server addresses are https only`() {
-        assertEquals("https://lifeos.gamch1k.com", ServerUrl.normalize(" lifeos.gamch1k.com/ "))
-        assertEquals("https://lifeos.gamch1k.com", ServerUrl.normalize("https://lifeos.gamch1k.com"))
+        assertEquals("https://lifeos.example.com", ServerUrl.normalize(" lifeos.example.com/ "))
+        assertEquals("https://lifeos.example.com", ServerUrl.normalize("https://lifeos.example.com"))
         assertEquals("https://example.com:8443/lifeos", ServerUrl.normalize("https://example.com:8443/lifeos/"))
-        assertNull(ServerUrl.normalize("http://10.66.66.1:3001"))
+        assertNull("plain http, such as a WireGuard address", ServerUrl.normalize("http://10.0.0.1:3001"))
         assertNull(ServerUrl.normalize(""))
         assertNull(ServerUrl.normalize("https://"))
         assertNull(ServerUrl.normalize("https://example.com/?x=1"))
