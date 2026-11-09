@@ -13,6 +13,7 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 | `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the "Life OS next" and "Life OS capture" complications, updates through the phone ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
+| `.github/` | CI on GitHub Actions (`workflows/ci.yml`, [below](#ci-github-actions)) and Dependabot's configuration. |
 | `version.properties` | The one version of both apps. |
 | `gradle/libs.versions.toml` | Every library, plugin and SDK level, in one version catalog. |
 
@@ -31,6 +32,7 @@ Builds run on the Life OS server, never on a laptop. The host needs only Docker 
 ```sh
 tools/build              # release: unit tests, signed APKs of both apps, checks, dist/
 tools/build test         # unit tests only, of the release variant (no signing material needed)
+tools/build ci           # what CI runs: unit tests, unsigned release APKs, the widget and ABI checks
 tools/build gradle ARGS  # any Gradle command in the builder, e.g. tools/build gradle :phone:dependencies
 tools/build image        # only build the builder image
 ```
@@ -62,6 +64,7 @@ Every APK that is ever installed is signed with the **release key**, including d
 - `tools/build` mounts that directory read-only, at the same path, and sets `LIFEOS_KEYSTORE_PROPERTIES=<dir>/keystore.properties`. To use another directory, set `LIFEOS_SIGNING_DIR`.
 - The key, its passwords and the properties are never printed, logged, copied into the repository, or baked into an image. `.gitignore` also blocks `*.p12`, `*.jks`, `*.keystore` and `keystore.properties`.
 - Without `LIFEOS_KEYSTORE_PROPERTIES`, compiling and unit tests still work. Building any APK, debug or release, then fails before any task runs, with a message that says why. `tools/build` refuses to start a release when the signing directory is missing.
+- The one exception is `-Plifeos.unsignedApks=true`, which [CI](#ci-github-actions) and `tools/build ci` use: the APKs are then built without any signing configuration, as `<module>-release-unsigned.apk`. Android refuses to install an unsigned APK, so every APK that can be installed still carries the release key.
 - After the build, each APK must have exactly one signer, with this certificate SHA-256:
   `AB:A9:79:EC:4A:64:CC:64:60:36:BA:F6:C9:76:4A:54:63:55:47:BC:C2:58:3C:59:BB:6A:E3:3A:8D:1E:EF:9F`
 
@@ -111,6 +114,33 @@ Before anything is copied there, the script checks each APK:
 | `sha256`, `size` | The SHA-256 (lowercase hex) and the size in bytes of the APK file. |
 | `builtAt` | When the build finished, in UTC (ISO 8601). |
 | `gitCommit` | The commit it was built from. A `-dirty` suffix means the tree had uncommitted changes; don't publish such a build. |
+
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` checks every push on GitHub, without the signing key. It runs `tools/builder/in-container ci`, the script that `tools/build ci` runs on the server:
+
+- the unit tests of every module (`testReleaseUnitTest`, as in `tools/build test`);
+- `:phone:assembleRelease` and `:wear:assembleRelease` with `-Plifeos.unsignedApks=true`: the release build type, so R8 and the same `ndk.abiFilters` as a release (they are set in `defaultConfig`), only unsigned;
+- the release's checks that need no signature: the widget classes in the phone's R8 mapping (BUG-41), and `tools/builder/check-apk-abi` on both APKs. The phone APK must carry `lib/arm64-v8a/` and the wear APK `lib/armeabi-v7a/` (BUG-45), or the run fails.
+
+When it runs:
+
+- on every push to any branch, on a pull request from a fork, and by hand (Actions › CI › Run workflow). A pull request from a branch of this repository gets no run of its own, because the branch's push already tested it;
+- not when a push changes only Markdown (`**.md`, `docs/**`);
+- a newer push to the same branch cancels the older run.
+
+How it runs:
+
+- One job on `ubuntu-latest`, with Temurin JDK 21. The SDK platform and build-tools are the ones `tools/builder/Dockerfile` pins, read from that file and installed only when the runner image lacks them (today it has both). The workflow installs no NDK, since the apps compile no native code; as in the builder, AGP packages the dependencies' native libraries as they are, unstripped.
+- `gradle/actions/setup-gradle` validates the wrapper JAR and restores the Gradle cache, with its open-source `basic` provider (a plain `actions/cache`). Only runs on `main` write that cache; other branches restore `main`'s.
+- Every action is pinned by commit SHA, with its version in a comment, and Dependabot keeps them current.
+- Nothing secret is involved. The workflow uses no secrets, and its token can only read the repository. The APKs stay unsigned and are not uploaded: Android won't install them, and the release APKs come from `tools/build`. Nothing is published.
+
+Cost: the repository is private, so runs count against GitHub Free's 2,000 minutes a month. A run without any Gradle cache took 8 min 35 s (unit tests 182 s, phone 177 s, wear 146 s), billed as 9 minutes, which is about 220 runs a month. A run that restores `main`'s cache skips the downloads.
+
+To reproduce a run on the server, use `tools/build ci`. It runs the same script in the builder container, under the heavy-job lock, without the signing directory. `tools/build test` runs only the unit tests, and a release (`tools/build`) runs everything plus the signature checks.
+
+Dependabot (`.github/dependabot.yml`) looks for updates weekly, for the Gradle dependencies (the version catalog and the plugins) and for the actions. Minor and patch updates come grouped, one pull request per ecosystem, and a major update gets its own. It keeps at most 5 Gradle and 3 actions pull requests open, and CI tests each one. It doesn't raise the SDK levels, `buildTools`, or what `tools/builder/Dockerfile` pins; those are raised by hand.
 
 ## Versioning
 
