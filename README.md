@@ -251,3 +251,9 @@ The phone app has a second entry in the app list, **Life OS Capture** (a microph
 The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes.
 
 The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complications, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
+
+## License
+
+Copyright (C) 2026 GAMch1k and the Life OS contributors.
+
+Life OS is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License, version 3 only (SPDX: `AGPL-3.0-only`), as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; see [`LICENSE`](LICENSE) for the full text. If you run a modified version for other people over a network, the license requires you to offer them its source code.
