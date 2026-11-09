@@ -27,7 +27,7 @@ android {
         // WatchAbi.APK_ABIS (WearApkAbiTest compares them through BuildConfig);
         // tools/builder/in-container fails a release without lib/armeabi-v7a/.
         val apkAbis = listOf("armeabi-v7a")
-        ndk { abiFilters += apkAbis }
+        ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("String", "APK_ABIS", "\"${apkAbis.joinToString(",")}\"")
     }
 
