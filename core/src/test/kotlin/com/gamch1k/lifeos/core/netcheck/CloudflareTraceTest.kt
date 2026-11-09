@@ -7,10 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CloudflareTraceTest {
-    // A real trace from https://lifeos.gamch1k.com/cdn-cgi/trace (client IP replaced).
+    // A real trace from a Life OS host's /cdn-cgi/trace (host name and client IP replaced).
     private val plaintextTrace = """
         fl=67f220
-        h=lifeos.gamch1k.com
+        h=lifeos.example.com
         ip=203.0.113.7
         ts=1791822760.000
         visit_scheme=https

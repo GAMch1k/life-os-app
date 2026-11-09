@@ -46,9 +46,11 @@ class NetworkCheckViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             val quic = state.value.quicAllowed
             try {
-                val token = tokens.current()?.token
+                // The saved server (or the default) and its token: a token goes only to its own server.
+                val connection = tokens.current()
+                val server = connection?.baseUrl ?: tokens.serverUrl()
                 val appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-                val result = check.run(appVersion = appVersion, quicAllowed = quic, token = token)
+                val result = check.run(server = server, appVersion = appVersion, quicAllowed = quic, token = connection?.token)
                 state.update { it.copy(running = false, result = result, error = null) }
             } catch (cancelled: CancellationException) {
                 throw cancelled

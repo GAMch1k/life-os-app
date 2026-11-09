@@ -1,6 +1,7 @@
 package com.gamch1k.lifeos.core.secrets
 
 import android.content.Context
+import com.gamch1k.lifeos.core.api.Connection
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -12,5 +13,8 @@ import kotlinx.coroutines.runBlocking
  */
 class ServiceTokenStore(@Suppress("UNUSED_PARAMETER") context: Context) {
     /** Blocks briefly; call it off the main thread. Null when signed out. */
-    fun load(): ServiceToken? = TokenStore.installed?.let { store -> runBlocking { store.current()?.token } }
+    fun load(): ServiceToken? = loadConnection()?.token
+
+    /** The saved server with its token; blocks briefly, call it off the main thread. Null when signed out. */
+    fun loadConnection(): Connection? = TokenStore.installed?.let { store -> runBlocking { store.current() } }
 }

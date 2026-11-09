@@ -11,8 +11,8 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Downloads a release's APK through the authenticated client into a
- * directory of its own, resuming a partial file, and keeps it only when its
+ * Downloads a release's APK from the update origin (LifeOsClient.download)
+ * into a directory of its own, resuming a partial file, and keeps it only when its
  * size and SHA-256 are the manifest's. Used for the phone's own update and
  * for the wear APK the phone sends to the watch.
  */

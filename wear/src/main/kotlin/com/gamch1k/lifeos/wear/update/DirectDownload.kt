@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.wear.update
 
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.update.PartialApk
 import com.gamch1k.lifeos.core.update.ReleaseApp
 import com.gamch1k.lifeos.core.update.UpdatePolicy
@@ -47,10 +48,11 @@ interface ApkHttp {
  * The watch's own download of an offered APK (transfer v2, docs/wear.md
  * "Install and updates"): ask Android for Wi-Fi (Wear OS brings it up for an
  * app that asks, when the watch's Wi-Fi setting allows it), and download the
- * APK from Life OS over that network with the watch's own token. The bytes go
- * into the same [PartialApk] the phone's stream uses, so a download that
- * breaks off is continued by the stream, and a download resumes what an
- * earlier attempt left (an HTTP range request).
+ * APK over that network from the update origin ([updatesUrl], never the
+ * owner's server; the watch's token goes along only when the two are the
+ * same origin). The bytes go into the same [PartialApk] the phone's stream
+ * uses, so a download that breaks off is continued by the stream, and a
+ * download resumes what an earlier attempt left (an HTTP range request).
  *
  * Every outcome but [Outcome.Downloaded] sends the watch back to the phone's
  * stream; the network request is always given back.
@@ -59,6 +61,8 @@ class DirectDownload(
     private val networks: WifiNetworks,
     private val http: ApkHttp,
     private val userAgent: String,
+    /** Where app updates come from (`lifeos.updatesUrl`), whatever server the watch uses. */
+    private val updatesUrl: String = LifeOsEndpoints.UPDATES_URL,
     /** How long Wi-Fi may take to come up; the phone's stream is the fallback. */
     private val wifiTimeoutMillis: Long = WIFI_TIMEOUT_MILLIS,
     private val idleMillis: Long = 30_000,
@@ -82,7 +86,7 @@ class DirectDownload(
 
     /**
      * Downloads [url] (a path such as `/android/lifeos-wear-0.4.3-10.apk`)
-     * from [credentials]' Life OS into [partial], for the APK [sha256] of
+     * from the update origin into [partial], for the APK [sha256] of
      * [size] bytes. [onStage] gets each stage, with the byte the download
      * starts at; [onProgress] the position in the APK.
      */
@@ -117,8 +121,11 @@ class DirectDownload(
         if (held == size) return Outcome.Downloaded
         onStage(Stage.DOWNLOADING, held)
         val headers = buildMap {
-            put("CF-Access-Client-Id", token.clientId)
-            put("CF-Access-Client-Secret", token.clientSecret)
+            // A token belongs to its server: the update origin gets it only when that is the server.
+            if (LifeOsEndpoints.sameOrigin(token.baseUrl, updatesUrl)) {
+                put("CF-Access-Client-Id", token.clientId)
+                put("CF-Access-Client-Secret", token.clientSecret)
+            }
             put("User-Agent", userAgent)
             put("Accept", "*/*")
             if (held > 0) put("Range", "bytes=$held-")
@@ -130,7 +137,7 @@ class DirectDownload(
         val status = try {
             withTimeoutOrNull(totalMillis) {
                 http.get(
-                    token.baseUrl.trimEnd('/') + url,
+                    updatesUrl.trimEnd('/') + url,
                     headers,
                     network,
                     idleMillis,

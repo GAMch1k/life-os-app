@@ -1,6 +1,5 @@
 package com.gamch1k.lifeos.phone.wearlink
 
-import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.secrets.ServiceTokenStore
 import com.gamch1k.lifeos.core.wearlink.PhoneWearLinkHandler
 import com.gamch1k.lifeos.core.wearlink.WearCredentials
@@ -31,8 +30,8 @@ import kotlinx.coroutines.tasks.await
  *
  * The token source and the relay come from the app's `Application`, which
  * implements [WearLinkHost] since 0.3.0. The fallback without it: the token
- * store's token through [ServiceTokenStore], and no relay (the watch then
- * calls Life OS directly).
+ * store's server and token through [ServiceTokenStore], and no relay (the
+ * watch then calls Life OS directly).
  */
 class PhoneWearLinkService : WearableListenerService() {
     private val handler by lazy {
@@ -87,10 +86,10 @@ class PhoneWearLinkService : WearableListenerService() {
         }
     }
 
-    // Only without a WearLinkHost: the token entered at onboarding or under Settings.
+    // Only without a WearLinkHost: the server and token entered at onboarding or under Settings.
     private fun fallbackTokenSource() = WearTokenSource {
-        ServiceTokenStore(applicationContext).load()?.let { token ->
-            WearCredentials(baseUrl = "https://${LifeOsEndpoints.HOST}", clientId = token.clientId, clientSecret = token.clientSecret)
+        ServiceTokenStore(applicationContext).loadConnection()?.let { connection ->
+            WearCredentials(baseUrl = connection.baseUrl, clientId = connection.token.clientId, clientSecret = connection.token.clientSecret)
         }
     }
 

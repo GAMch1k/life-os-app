@@ -9,10 +9,10 @@ import java.time.ZonedDateTime
 
 class NetworkCheckReportTest {
     private fun trace(sni: String) = CloudflareTrace.parse(
-        "h=lifeos.gamch1k.com\nip=203.0.113.7\ncolo=TXL\nhttp=http/2\ntls=TLSv1.3\nsni=$sni\nwarp=off\nkex=X25519MLKEM768\n",
+        "h=lifeos.example.com\nip=203.0.113.7\ncolo=TXL\nhttp=http/2\ntls=TLSv1.3\nsni=$sni\nwarp=off\nkex=X25519MLKEM768\n",
     )
 
-    private val url = "https://lifeos.gamch1k.com/cdn-cgi/trace"
+    private val url = "https://lifeos.example.com/cdn-cgi/trace"
 
     private val echRecord = HttpsRecord(1, ".", listOf("h3", "h2"), emptyList(), emptyList(), 71, listOf("cloudflare-ech.com"))
 
@@ -46,7 +46,7 @@ class NetworkCheckReportTest {
         cronet = cronet,
         httpEngine = null,
         platform = platform,
-        dns = DnsProbeResult("lifeos.gamch1k.com", dnsAnswer, 21, null),
+        dns = DnsProbeResult("lifeos.example.com", dnsAnswer, 21, null),
         authenticated = authenticated,
     )
 
@@ -100,8 +100,8 @@ class NetworkCheckReportTest {
     @Test
     fun `a service token sent to the Access login is explained, with values omitted`() {
         val redirected = HttpProbeResult(
-            "Service token request", "https://lifeos.gamch1k.com/api/tasks/v1/tasks?limit=1", 302, "h2", 230, null, null,
-            "damp-surf-d6be.cloudflareaccess.com/cdn-cgi/access/login/lifeos.gamch1k.com", null,
+            "Service token request", "https://lifeos.example.com/api/tasks/v1/tasks?limit=1", 302, "h2", 230, null, null,
+            "example-team.cloudflareaccess.com/cdn-cgi/access/login/lifeos.example.com", null,
         )
         val lines = NetworkCheckReport.authLines(redirected)
         assertEquals("Service token: set (values omitted)", lines.first())
@@ -112,7 +112,7 @@ class NetworkCheckReportTest {
     @Test
     fun `a 200 with the service token says it works`() {
         val ok = HttpProbeResult(
-            "Service token request", "https://lifeos.gamch1k.com/api/tasks/v1/tasks?limit=1", 200, "h2", 180, null, null, null, null,
+            "Service token request", "https://lifeos.example.com/api/tasks/v1/tasks?limit=1", 200, "h2", 180, null, null, null, null,
         )
         assertTrue(NetworkCheckReport.authLines(ok).any { it.startsWith("The service token works") })
     }

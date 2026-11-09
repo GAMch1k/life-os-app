@@ -96,4 +96,13 @@ class PhoneWearLinkHostTest {
         tokens.clear()
         assertNull(tokens.load())
     }
+
+    @Test
+    fun `a new server reaches the watch at once`() = runBlocking {
+        val tokens = TokenStore(stores.create(), PlainCipher)
+        tokens.save("https://lifeos.example.com", FakeTransport.TOKEN)
+        // Settings › Change server or token: the watch follows the phone's server.
+        tokens.save("my-own.example.org", ServiceToken("own.access", "own-secret"))
+        assertEquals(WearCredentials("https://my-own.example.org", "own.access", "own-secret"), tokens.load())
+    }
 }

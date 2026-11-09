@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.core.api
 
+import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.secrets.ServiceToken
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -29,11 +30,16 @@ class Connection(val baseUrl: String, val token: ServiceToken) {
  * dedupe key, content-addressed media, a voice upload with its
  * `Idempotency-Key`) are retried a few times on errors that may pass
  * ([LifeOsException.retryable]); the rest is left to the capture queue.
+ *
+ * App updates ([updateManifest], [download]) come from [updatesUrl], the
+ * update origin, never from the owner's server; the token goes along only
+ * when that origin is the owner's server.
  */
 class LifeOsClient(
     private val transport: HttpTransport,
     private val connection: suspend () -> Connection?,
     private val userAgent: String,
+    private val updatesUrl: String = LifeOsEndpoints.UPDATES_URL,
     private val retryDelaysMillis: List<Long> = listOf(700, 2_500),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -167,12 +173,14 @@ class LifeOsClient(
         exchange("GET", "/api/tasks/v1/tasks", listOf("limit" to "1"), null, idempotent = false, candidate = candidate)
     }
 
-    /** The update manifest, `GET /android/updates`. */
-    suspend fun updateManifest(): UpdateManifest = get("/android/updates", emptyList(), UpdateManifest.serializer())
+    /** The update manifest, `GET /android/updates` on the update origin. */
+    suspend fun updateManifest(): UpdateManifest =
+        decode("/android/updates", exchange("GET", "/android/updates", emptyList(), null, idempotent = true, update = true), UpdateManifest.serializer())
 
     /**
-     * Downloads [path] (same host) into [sink]. [rangeStart] asks for the rest
-     * of a partial file (`Range: bytes=n-`); the server may still answer 200.
+     * Downloads [path] (an APK of the manifest, on the update origin) into
+     * [sink]. [rangeStart] asks for the rest of a partial file
+     * (`Range: bytes=n-`); the server may still answer 200.
      */
     suspend fun download(path: String, sink: ResponseSink, rangeStart: Long? = null, onProgress: ((Long) -> Unit)? = null): HttpResponse =
         exchange(
@@ -181,6 +189,7 @@ class LifeOsClient(
             emptyList(),
             null,
             idempotent = false,
+            update = true,
             accept = "*/*",
             extraHeaders = rangeStart?.let { mapOf("Range" to "bytes=$it-") } ?: emptyMap(),
             sink = sink,
@@ -250,6 +259,8 @@ class LifeOsClient(
         body: RequestBody?,
         idempotent: Boolean,
         candidate: Connection? = null,
+        /** An app update: sent to [updatesUrl], with the token only if that is the owner's server. */
+        update: Boolean = false,
         accept: String = "application/json",
         extraHeaders: Map<String, String> = emptyMap(),
         sink: ResponseSink? = null,
@@ -257,13 +268,17 @@ class LifeOsClient(
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
     ): HttpResponse {
         val target = candidate ?: connection() ?: throw LifeOsException.NotSignedIn()
+        val base = if (update) updatesUrl else target.baseUrl
+        val withToken = !update || LifeOsEndpoints.sameOrigin(target.baseUrl, updatesUrl)
         val request = HttpRequest(
             method = method,
-            url = url(target.baseUrl, path, query),
+            url = url(base, path, query),
             headers = buildMap {
-                put("CF-Access-Client-Id", target.token.clientId)
-                put("CF-Access-Client-Secret", target.token.clientSecret)
-                put("X-Life-OS-Actor", "user")
+                if (withToken) {
+                    put("CF-Access-Client-Id", target.token.clientId)
+                    put("CF-Access-Client-Secret", target.token.clientSecret)
+                    put("X-Life-OS-Actor", "user")
+                }
                 put("Accept", accept)
                 put("User-Agent", userAgent)
                 putAll(extraHeaders)

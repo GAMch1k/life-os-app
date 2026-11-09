@@ -39,8 +39,11 @@ class FakeTransport : HttpTransport {
         val TOKEN = ServiceToken("0123456789abcdef0123456789abcdef.access", "cfast_secretsecretsecret")
         val CONNECTION = Connection("https://lifeos.example.com", TOKEN)
 
+        /** The update origin is [CONNECTION]'s server, as for the owner; LifeOsClientTest covers other servers. */
+        const val UPDATES_URL = "https://lifeos.example.com"
+
         fun client(transport: FakeTransport, connection: Connection? = CONNECTION, sleeps: MutableList<Long> = mutableListOf()) =
-            LifeOsClient(transport, { connection }, userAgent = "LifeOS-Android/test", sleep = { sleeps += it })
+            LifeOsClient(transport, { connection }, userAgent = "LifeOS-Android/test", updatesUrl = UPDATES_URL, sleep = { sleeps += it })
     }
 }
 
