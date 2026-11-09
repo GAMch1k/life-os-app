@@ -136,7 +136,7 @@ How it runs:
 - Every action is pinned by commit SHA, with its version in a comment, and Dependabot keeps them current.
 - Nothing secret is involved. The workflow uses no secrets, and its token can only read the repository. The APKs stay unsigned and are not uploaded: Android won't install them, and the release APKs come from `tools/build`. Nothing is published.
 
-Cost: the repository is private, so runs count against GitHub Free's 2,000 minutes a month. A run without any Gradle cache took 8 min 35 s (unit tests 182 s, phone 177 s, wear 146 s), billed as 9 minutes, which is about 220 runs a month. A run that restores `main`'s cache skips the downloads.
+Cost: the repository is private, so runs count against GitHub Free's 2,000 minutes a month. Runs without any Gradle cache (X-09's, before `main` had one) took 8 min 35 s to 9 min 52 s: about 3 minutes for the unit tests and 2½ to 3½ for each app. They are billed as 9 or 10 minutes, so 2,000 minutes last about 200 such runs. A run that restores `main`'s cache skips the downloads and reuses the outputs of unchanged tasks.
 
 To reproduce a run on the server, use `tools/build ci`. It runs the same script in the builder container, under the heavy-job lock, without the signing directory. `tools/build test` runs only the unit tests, and a release (`tools/build`) runs everything plus the signature checks.
 
