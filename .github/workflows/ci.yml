@@ -8,9 +8,9 @@
 # No secrets: the release key never leaves the server, the APKs stay unsigned
 # (Android won't install them), and nothing is uploaded or published.
 #
-# The repository is private, so every minute counts against the Free plan's
-# 2,000 a month: Markdown-only changes don't run, a newer push cancels the
-# older run of the same branch, and the Gradle cache is restored.
+# The repository is public, so the runs cost nothing; they are kept short
+# anyway: Markdown-only changes don't run, a newer push cancels the older run
+# of the same branch, and the Gradle cache is restored.
 name: CI
 
 on:
