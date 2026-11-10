@@ -83,3 +83,21 @@ jobs:
 
       - name: Unit tests, unsigned release APKs, widget and ABI checks
         run: tools/builder/in-container ci
+
+  # The CLA workflow's logic (.github/workflows/cla.yml), against a fake
+  # GitHub API: plain node --test, nothing to install. Node 22, as life-os's
+  # CI, which runs the same tests. Like build, it skips pull requests from
+  # branches of this repository, which their push already tested.
+  cla:
+    name: CLA check (unit tests)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - run: node --test .github/cla/cla.test.js
