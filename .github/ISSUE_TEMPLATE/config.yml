@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/GAMch1k/life-os-app/security/advisories/new
+    about: Report it privately, never in a public issue. See SECURITY.md.
+  - name: Install the phone and watch apps
+    url: https://github.com/GAMch1k/life-os/blob/master/docs/install/phone-apps.md
+    about: Installing the apps, the service token, and updates.
+  - name: Server, Dashboard, or setup problems
+    url: https://github.com/GAMch1k/life-os/issues/new/choose
+    about: Those belong in the life-os repository.

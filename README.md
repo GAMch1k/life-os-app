@@ -256,6 +256,13 @@ The phone app is a normal APK. Open the published `lifeos-phone-….apk` on the 
 
 The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complications, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
 
+## Contributing and security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to propose a change, the checks a pull request must pass, and how changes ship.
+- [SECURITY.md](SECURITY.md): the supported versions, and how to report a vulnerability privately.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we treat each other.
+- Bugs and ideas: [open an issue](https://github.com/GAMch1k/life-os-app/issues/new/choose).
+
 ## License
 
 Copyright (C) 2026 GAMch1k and the Life OS contributors.
