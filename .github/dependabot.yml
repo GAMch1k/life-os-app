@@ -1,7 +1,9 @@
 # Weekly version updates (X-09): the Gradle dependencies (the version catalog,
 # the plugins), and the actions .github/workflows/ci.yml pins by commit SHA.
-# Minor and patch updates come grouped, one pull request per ecosystem; a
-# major update gets a pull request of its own. CI tests each one.
+# Minor and patch updates come grouped, one pull request per ecosystem, and
+# CI tests each one. No ecosystem gets major versions (the owner's decision,
+# 2026-11-10, as in life-os): a major upgrade is a ticket of its own. The
+# ignore rules apply to version updates only; security updates still come.
 #
 # Not covered, so raised by hand: the SDK levels and buildTools in
 # gradle/libs.versions.toml, and the JDK, command-line tools and SDK packages
@@ -17,6 +19,10 @@ updates:
       gradle-minor-and-patch:
         patterns: ['*']
         update-types: [minor, patch]
+    # No majors (owner's decision, 2026-11-10); a major upgrade is a ticket.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /
@@ -27,3 +33,7 @@ updates:
       actions-minor-and-patch:
         patterns: ['*']
         update-types: [minor, patch]
+    # No majors (owner's decision, 2026-11-10); a major upgrade is a ticket.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

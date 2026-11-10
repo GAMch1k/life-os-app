@@ -157,7 +157,7 @@ To reproduce a run on the server, use `tools/build ci`. It runs the same script 
 
 A second workflow, `.github/workflows/cla.yml`, checks that everyone who wrote a commit in a pull request has signed the [Contributor License Agreement](CLA.md), and sets the commit status `CLA`. It is the same workflow as in life-os, with the same logic (`.github/cla/cla.js`, whose unit tests CI's `cla` job runs with `node --test`); life-os's [docs/operations/ci.md](https://github.com/GAMch1k/life-os/blob/master/docs/operations/ci.md#cla-check) explains it, why its `pull_request_target` trigger is safe, where the signatures live (this repository's `cla-signatures` branch), and how to allowlist someone or run it again.
 
-Dependabot (`.github/dependabot.yml`) looks for updates weekly, for the Gradle dependencies (the version catalog and the plugins) and for the actions. Minor and patch updates come grouped, one pull request per ecosystem, and a major update gets its own. It keeps at most 5 Gradle and 3 actions pull requests open, and CI tests each one. It doesn't raise the SDK levels, `buildTools`, or what `tools/builder/Dockerfile` pins; those are raised by hand.
+Dependabot (`.github/dependabot.yml`) looks for updates weekly, for the Gradle dependencies (the version catalog and the plugins) and for the actions. Minor and patch updates come grouped, one pull request per ecosystem. Major versions are never proposed (the owner's decision, 2026-11-10, as in life-os): a major upgrade is a ticket of its own; security updates still come. It keeps at most 5 Gradle and 3 actions pull requests open, and CI tests each one. It doesn't raise the SDK levels, `buildTools`, or what `tools/builder/Dockerfile` pins; those are raised by hand.
 
 ## Versioning
 
