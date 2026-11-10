@@ -1,0 +1,82 @@
+# Gradle dependency submission (SEC-IMG): resolves every module's Gradle
+# dependencies, the plugins' included, and sends them to GitHub's dependency
+# graph. GitHub cannot read them from the Kotlin build scripts and the
+# version catalog itself, so without this the graph lists only the
+# workflows' actions and Dependabot alerts never cover a Gradle dependency.
+# (Dependabot's weekly version updates, .github/dependabot.yml, read the
+# build files directly and need none of this.)
+#
+# On main only: after a change to the build files there, and once a week for
+# advisories about dependencies that did not change. Never on pull requests,
+# so nothing from a fork runs with the write permission below. It builds and
+# signs nothing.
+name: Dependency submission
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.gradle.kts'
+      - 'gradle/**'
+      - 'gradle.properties'
+      - 'tools/builder/Dockerfile'
+      - '.github/workflows/dependency-submission.yml'
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  submit:
+    name: Submit the Gradle dependency graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # The dependency submission API needs it; nothing else is written.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The builder's JDK (tools/builder/Dockerfile: Temurin 21), as in ci.yml.
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The SDK platform and build-tools the builder image pins, as in ci.yml:
+      # the Android Gradle Plugin needs them to configure the modules.
+      - name: Android SDK packages
+        run: |
+          platform=$(sed -n 's/^ARG SDK_PLATFORM=//p' tools/builder/Dockerfile)
+          build_tools=$(sed -n 's/^ARG SDK_BUILD_TOOLS=//p' tools/builder/Dockerfile)
+          [[ -n $platform && -n $build_tools ]] || { echo "could not read the SDK packages from tools/builder/Dockerfile" >&2; exit 1; }
+          missing=()
+          [[ -d $ANDROID_HOME/platforms/$platform ]] || missing+=("platforms;$platform")
+          [[ -d $ANDROID_HOME/build-tools/$build_tools ]] || missing+=("build-tools;$build_tools")
+          if ((${#missing[@]})); then
+            sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+            (yes || true) | "$sdkmanager" --licenses > /dev/null
+            "$sdkmanager" --install "${missing[@]}"
+          fi
+          echo "Android SDK: platforms;$platform, build-tools;$build_tools (installed now: ${missing[*]:-none})"
+
+      # Validates the Gradle wrapper, resolves every configuration of every
+      # project, and submits the result. The graph goes to the API only, not
+      # also to an artifact. The cache uses the MIT-licensed basic provider,
+      # like ci.yml's.
+      - uses: gradle/actions/dependency-submission@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+          dependency-graph: generate-and-submit
+          add-job-summary: on-failure
