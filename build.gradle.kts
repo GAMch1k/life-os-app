@@ -6,6 +6,18 @@ buildscript {
         // AGP 9 compiles Kotlin itself ("built-in Kotlin") with the Kotlin
         // Gradle plugin found on the build classpath; this pins its version.
         classpath(libs.kotlin.gradle.plugin)
+
+        // Build-tool floors (SEC-APP, gradle/libs.versions.toml): libraries
+        // that AGP brings onto this classpath, the plugins', in versions with
+        // security advisories. Constraints only: they raise a version AGP
+        // brings anyway, never add a library, and lose to a newer one.
+        constraints {
+            libs.bundles.build.tool.floors.get().forEach { floor ->
+                add("classpath", "${floor.module}:${floor.versionConstraint.requiredVersion}") {
+                    because("SEC-APP: AGP brings an older version with a security advisory")
+                }
+            }
+        }
     }
 }
 
@@ -14,6 +26,30 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.kotlin.serialization) apply false
+}
+
+// ---- Build-tool floors on lint's classpath (SEC-APP)
+//
+// AGP resolves lint (lint-gradle, the version that goes with AGP) in each
+// module's androidLintTool configuration, apart from the plugin classpath
+// above, and brings some of the same old versions there. The same floors
+// apply; the apps' own classpaths get none of this.
+
+val buildToolFloors: List<String> = libs.bundles.build.tool.floors.get()
+    .map { "${it.module}:${it.versionConstraint.requiredVersion}" }
+
+subprojects {
+    val module = this
+    configurations.matching { it.name == "androidLintTool" }.configureEach {
+        val lintClasspath = this
+        buildToolFloors.forEach { floor ->
+            lintClasspath.dependencyConstraints.add(
+                module.dependencies.constraints.create(floor) {
+                    because("SEC-APP: lint brings an older version with a security advisory")
+                },
+            )
+        }
+    }
 }
 
 // ---- Version: one versionName/versionCode for both apps (version.properties)

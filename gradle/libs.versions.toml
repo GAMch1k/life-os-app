@@ -43,6 +43,21 @@ libadb = "3.1.1"
 conscrypt = "2.9.0"
 bouncycastle = "1.86"
 
+# Build tools only, never in an APK (SEC-APP). AGP 9.5.1, the newest 9.x,
+# brings these libraries in versions with security advisories, on its own
+# classpath (the root project's buildscript classpath) and on lint's (each
+# module's androidLintTool). The root build.gradle.kts turns the
+# build-tool-floors bundle below into dependency constraints on those two
+# classpaths only: floors, so a newer version that AGP asks for still wins.
+# Drop an entry once AGP brings that version or a newer one by itself
+# (./gradlew buildEnvironment, :phone:dependencies --configuration androidLintTool).
+buildToolsBouncycastle = "1.86"   # was 1.80.2 (sdk-common): GHSA-9pwp-9qqc-pr26 and GHSA-qp49-qgx5-5m26 (bcprov, fixed in 1.85), GHSA-wg6q-6289-32hp (bcpkix, 1.84); the apps' own BouncyCastle version
+buildToolsGuava = "33.7.2-jre"    # was 33.4.0-jre: GHSA-xxph-c9ww-hj94
+buildToolsJose4j = "0.9.6"        # was 0.9.5 (bundletool 1.18.3): GHSA-3677-xxcr-wjqv
+buildToolsJdom2 = "2.0.6.1"       # was 2.0.6 (jetifier-processor 1.0.0-beta10): GHSA-2363-cqg2-863c
+buildToolsCommonsLang3 = "3.18.0" # was 3.16.0 (commons-compress 1.27.1): GHSA-j288-q9x7-2f5v
+buildToolsHttpclient = "4.5.14"   # was 4.5.6 on lint's classpath (httpmime 4.5.6): GHSA-7r82-7xv7-xcpj; AGP's own classpath already resolves 4.5.14
+
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 
@@ -95,6 +110,23 @@ bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk15to18", version.re
 cronet-bundled = { module = "org.chromium.net:cronet-bundled", version.ref = "cronet" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+
+# Build-tool floors (SEC-APP, see [versions]): constraints on AGP's and lint's
+# classpaths only, never dependencies of the apps.
+buildtools-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "buildToolsBouncycastle" }
+buildtools-bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "buildToolsBouncycastle" }
+buildtools-bcutil = { module = "org.bouncycastle:bcutil-jdk18on", version.ref = "buildToolsBouncycastle" }
+buildtools-guava = { module = "com.google.guava:guava", version.ref = "buildToolsGuava" }
+buildtools-jose4j = { module = "org.bitbucket.b_c:jose4j", version.ref = "buildToolsJose4j" }
+buildtools-jdom2 = { module = "org.jdom:jdom2", version.ref = "buildToolsJdom2" }
+buildtools-commons-lang3 = { module = "org.apache.commons:commons-lang3", version.ref = "buildToolsCommonsLang3" }
+buildtools-httpclient = { module = "org.apache.httpcomponents:httpclient", version.ref = "buildToolsHttpclient" }
+
+[bundles]
+build-tool-floors = [
+    "buildtools-bcprov", "buildtools-bcpkix", "buildtools-bcutil", "buildtools-guava",
+    "buildtools-jose4j", "buildtools-jdom2", "buildtools-commons-lang3", "buildtools-httpclient",
+]
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
