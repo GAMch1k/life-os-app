@@ -1,0 +1,8 @@
+# Contributing to the Life OS app
+
+Contributions are welcome. This repository holds the Android phone app and the Wear OS app; the server, the Dashboard, and the APIs they call are in [GAMch1k/life-os](https://github.com/GAMch1k/life-os), which has its own [contributing guide](https://github.com/GAMch1k/life-os/blob/master/CONTRIBUTING.md).
+
+1. Fork the repository, branch from `main`, and keep a pull request to one coherent change. When it changes what the apps do or how they are built, update [README.md](README.md) or [`docs/`](docs) in the same pull request.
+2. Run the unit tests, and build the apps if you changed them: `tools/build ci` runs what CI runs (the unit tests, both release APKs unsigned, the widget and ABI checks) in the builder container, so it needs only Docker and `flock`; see [Building](README.md#building). Every check must pass on the pull request before it can be merged.
+3. Sign the [Contributor License Agreement](CLA.md), once: comment on your pull request with exactly `I have read the CLA Document and I hereby sign the CLA`. You keep your copyright, your work stays available under the AGPL, and the maintainer may also offer it under other licenses. The `CLA` check comments on your pull request with what is missing and turns green once everyone who wrote a commit in it has signed. Commit with an email address that is linked to your GitHub account, so the check can tell who wrote each commit. A signature in life-os doesn't count here: each repository keeps its own record.
+4. CI runs on a pull request from a fork only after the maintainer approves the run, so the checks may take a while to start. The `CLA` check runs at once.
