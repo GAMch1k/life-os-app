@@ -13,7 +13,7 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 | `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the "Life OS next" and "Life OS capture" complications, updates through the phone ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
-| `.github/` | CI on GitHub Actions (`workflows/ci.yml`, [below](#ci-github-actions)) and Dependabot's configuration. |
+| `.github/` | CI on GitHub Actions (`workflows/ci.yml`, [below](#ci-github-actions)), the CLA check (`workflows/cla.yml`, `cla/`), and Dependabot's configuration. |
 | `version.properties` | The one version of both apps. |
 | `gradle/libs.versions.toml` | Every library, plugin and SDK level, in one version catalog. |
 
@@ -155,6 +155,8 @@ Cost: the repository is private, so runs count against GitHub Free's 2,000 minut
 
 To reproduce a run on the server, use `tools/build ci`. It runs the same script in the builder container, under the heavy-job lock, without the signing directory. `tools/build test` runs only the unit tests, and a release (`tools/build`) runs everything plus the signature checks.
 
+A second workflow, `.github/workflows/cla.yml`, checks that everyone who wrote a commit in a pull request has signed the [Contributor License Agreement](CLA.md), and sets the commit status `CLA`. It is the same workflow as in life-os, with the same logic (`.github/cla/cla.js`, whose unit tests CI's `cla` job runs with `node --test`); life-os's [docs/operations/ci.md](https://github.com/GAMch1k/life-os/blob/master/docs/operations/ci.md#cla-check) explains it, why its `pull_request_target` trigger is safe, where the signatures live (this repository's `cla-signatures` branch), and how to allowlist someone or run it again.
+
 Dependabot (`.github/dependabot.yml`) looks for updates weekly, for the Gradle dependencies (the version catalog and the plugins) and for the actions. Minor and patch updates come grouped, one pull request per ecosystem, and a major update gets its own. It keeps at most 5 Gradle and 3 actions pull requests open, and CI tests each one. It doesn't raise the SDK levels, `buildTools`, or what `tools/builder/Dockerfile` pins; those are raised by hand.
 
 ## Versioning
@@ -257,3 +259,5 @@ The watch app is installed from the phone: **Settings › Watch › Set up the w
 Copyright (C) 2026 GAMch1k and the Life OS contributors.
 
 Life OS is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License, version 3 only (SPDX: `AGPL-3.0-only`), as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; see [`LICENSE`](LICENSE) for the full text. If you run a modified version for other people over a network, the license requires you to offer them its source code.
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md): you keep your copyright, your contribution stays available under the AGPL, and the maintainer may also offer it under other licenses. See [CONTRIBUTING.md](CONTRIBUTING.md).
