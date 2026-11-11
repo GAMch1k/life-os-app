@@ -17,7 +17,9 @@ import com.gamch1k.lifeos.core.api.AppRelease
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.api.LifeOsJson
-import com.gamch1k.lifeos.core.config.LifeOsEndpoints
+import com.gamch1k.lifeos.core.update.ApkInspector
+import com.gamch1k.lifeos.core.update.ApkRules
+import com.gamch1k.lifeos.core.update.ReleaseDownloader
 import com.gamch1k.lifeos.core.update.UpdateDecision
 import com.gamch1k.lifeos.core.update.UpdatePolicy
 import com.gamch1k.lifeos.phone.BuildConfig
@@ -51,16 +53,19 @@ sealed interface UpdateState {
 }
 
 /**
- * Self-update from Life OS (P18-09), by the contract in the life-os
- * repository's docs/operations/android-releases.md: read `/android/updates`,
- * take `apps.phone` only if its versionCode is higher, download it through
- * the client, both from the update origin (`lifeos.updatesUrl`, whatever
- * server the owner chose), check size and SHA-256, check that the archive is
- * this app at that version, and hand it to PackageInstaller with
- * USER_ACTION_NOT_REQUIRED. Android then installs it only if the release key
- * signed it. It asks the owner to confirm once, on the first self-update
- * after a browser install (the browser is the installer of record); once Life
- * OS installed the current version, later updates are silent.
+ * Self-update (P18-09, P20-06), by the contract in the life-os repository's
+ * docs/operations/android-releases.md: read the manifest of the update source
+ * (`/android/updates` on the update origin while the app is connected to that
+ * server, else the latest GitHub release's `updates.json`;
+ * [com.gamch1k.lifeos.core.update.UpdateSource]), take `apps.phone` only if
+ * its versionCode is higher and its URL belongs to that source, download it
+ * through the client, check size and SHA-256, check that the archive is this
+ * app at that version, signed by exactly this app's own certificate
+ * ([ApkRules]), and hand it to PackageInstaller with USER_ACTION_NOT_REQUIRED.
+ * Android checks the signature once more when it installs. It asks the owner
+ * to confirm once, on the first self-update after a browser install (the
+ * browser is the installer of record); once Life OS installed the current
+ * version, later updates are silent.
  *
  * When: on app start (at most every 6 hours; only tells), daily from
  * [UpdateWorker] on an unmetered network (downloads, and installs at once
@@ -96,7 +101,7 @@ class UpdateManager(
         val now = Instant.now()
         if (trigger == Trigger.START && !UpdatePolicy.checkDue(lastCheck(), now, START_INTERVAL)) return@withLock
         if (trigger == Trigger.MANUAL) stateFlow.value = UpdateState.Checking
-        val manifest = try {
+        val (source, manifest) = try {
             client.updateManifest()
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -111,7 +116,7 @@ class UpdateManager(
             return@withLock
         }
         settings.edit { it[LAST_CHECK] = now.toString() }
-        when (val decision = UpdatePolicy.decide(manifest, BuildConfig.VERSION_CODE.toLong(), Build.VERSION.SDK_INT)) {
+        when (val decision = UpdatePolicy.decide(manifest, BuildConfig.VERSION_CODE.toLong(), Build.VERSION.SDK_INT, source)) {
             is UpdateDecision.UpToDate -> {
                 stateFlow.value = UpdateState.UpToDate
                 dir.deleteRecursively()
@@ -121,7 +126,7 @@ class UpdateManager(
                 null,
             )
             is UpdateDecision.UnsupportedFormat -> stateFlow.value = UpdateState.Failed(
-                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version by hand from ${LifeOsEndpoints.UPDATES_URL}/android/.",
+                "This version cannot read the update manifest (format ${decision.formatVersion}). Install the new version by hand from ${source.downloadPage()}.",
                 null,
             )
             is UpdateDecision.Invalid -> stateFlow.value = UpdateState.Failed("The published update is unusable: ${decision.reason}.", null)
@@ -206,14 +211,13 @@ class UpdateManager(
     private suspend fun install(release: AppRelease) = withContext(Dispatchers.IO) {
         val file = apkFile(release)
         val packageManager = app.packageManager
-        val archive = packageManager.getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(0))
-        val problem = when {
-            !file.isFile -> "the downloaded file is gone"
-            archive == null -> "the download is not an APK"
-            archive.packageName != app.packageName -> "the APK is ${archive.packageName}, not this app"
-            archive.longVersionCode != release.versionCode -> "the APK is version ${archive.longVersionCode}, the manifest says ${release.versionCode}"
-            archive.longVersionCode <= BuildConfig.VERSION_CODE -> "the APK is not newer than this app (a downgrade is refused)"
-            else -> null
+        // This app's package at the announced version, newer than this one,
+        // and signed by exactly this app's certificate: an APK signed by
+        // anyone else never reaches the installer, whatever its source.
+        val problem = if (!file.isFile) {
+            "the downloaded file is gone"
+        } else {
+            ApkRules.check(ApkInspector.archive(app, file), release.versionCode, ApkInspector.installed(app), BuildConfig.VERSION_CODE.toLong())?.message
         }
         if (problem != null) {
             file.delete()

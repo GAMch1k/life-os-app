@@ -1,6 +1,7 @@
 package com.gamch1k.lifeos.core.api
 
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
+import com.gamch1k.lifeos.core.update.UpdateSource
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -299,7 +300,8 @@ class LifeOsClientTest {
     @Test
     fun `the update manifest is read from android updates`() = runBlocking {
         transport.json(200, manifestJson)
-        val manifest = client.updateManifest()
+        val (source, manifest) = client.updateManifest()
+        assertEquals(UpdateSource.UpdateOrigin, source)
         assertEquals(3L, manifest.apps.phone!!.versionCode)
         assertNull(manifest.apps.wear)
         val request = transport.requests.single()
@@ -307,39 +309,143 @@ class LifeOsClientTest {
         assertEquals("the update origin is the owner's server: the token goes along", FakeTransport.TOKEN.clientId, request.headers["CF-Access-Client-Id"])
     }
 
-    @Test
-    fun `switching servers never switches the update source, and the other server's token stays with it`() = runBlocking {
-        var server = "https://lifeos.example.com"
-        val client = LifeOsClient(transport, { Connection(server, FakeTransport.TOKEN) }, "ua", updatesUrl = "https://lifeos.example.com", sleep = {})
-        transport.json(200, manifestJson)
-        client.updateManifest()
+    // ---- Updates from GitHub Releases (P20-06): any server but the update origin, or none
 
-        // Settings › Change server or token: the owner's own server.
+    private val repo = "GAMch1k/life-os-app"
+    private val latestManifest = "https://github.com/$repo/releases/latest/download/updates.json"
+    private val releaseManifest = "https://github.com/$repo/releases/download/v0.4.6-13/updates.json"
+    private val assetHost = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r&sig=x"
+    private val githubApk = "https://github.com/$repo/releases/download/v0.4.6-13/lifeos-phone-0.4.6-13.apk"
+    private val githubManifestJson = """{"formatVersion":1,"apps":{"phone":{"versionCode":13,"versionName":"0.4.6","minSdk":34,"sha256":"${"0".repeat(64)}","size":10,"url":"$githubApk","previous":[]}}}"""
+
+    private fun clientOn(server: () -> String?) = LifeOsClient(
+        transport,
+        { server()?.let { Connection(it, FakeTransport.TOKEN) } },
+        "ua",
+        updatesUrl = "https://lifeos.example.com",
+        updatesRepo = repo,
+        sleep = {},
+    )
+
+    private fun assertNoToken(request: HttpRequest) {
+        assertNull(request.headers["CF-Access-Client-Id"])
+        assertNull(request.headers["CF-Access-Client-Secret"])
+        assertNull(request.headers["X-Life-OS-Actor"])
+    }
+
+    @Test
+    fun `on another server updates come from GitHub Releases, through GitHub's redirects, without the token`() = runBlocking {
+        val client = clientOn { "https://my-own.example.org" }
+        transport.redirect(302, releaseManifest).redirect(302, assetHost).json(200, githubManifestJson, mapOf("content-type" to listOf("application/octet-stream")))
+        val (source, manifest) = client.updateManifest()
+        assertEquals(UpdateSource.GitHubRepo(repo), source)
+        assertEquals(githubApk, manifest.apps.phone!!.url)
+        assertEquals(listOf(latestManifest, releaseManifest, assetHost), transport.requests.map { it.url })
+        transport.requests.forEach(::assertNoToken)
+    }
+
+    @Test
+    fun `switching servers switches the update source, and the token only ever goes to its own server`() = runBlocking {
+        var server = "https://lifeos.example.com"
+        val client = clientOn { server }
+        transport.json(200, manifestJson)
+        assertEquals(UpdateSource.UpdateOrigin, client.updateManifest().source)
+
+        // Settings › Connection › Edit connection: the owner's own server.
         server = "https://my-own.example.org"
-        transport.json(200, manifestJson).json(200, "apk").json(200, """{"items":[]}""")
-        client.updateManifest()
-        client.download("/android/lifeos-phone-0.3.0-3.apk", { _, _ -> java.io.ByteArrayOutputStream() })
+        transport.json(200, githubManifestJson).json(200, "apk").json(200, """{"items":[]}""")
+        assertEquals(UpdateSource.GitHubRepo(repo), client.updateManifest().source)
+        client.download(githubApk, { _, _ -> java.io.ByteArrayOutputStream() })
         client.openTasksDueBefore(Instant.EPOCH)
 
         val (before, after, apk, tasks) = transport.requests
         assertEquals("https://lifeos.example.com/android/updates", before.url)
-        assertEquals(before.url, after.url)
-        assertEquals("https://lifeos.example.com/android/lifeos-phone-0.3.0-3.apk", apk.url)
-        for (update in listOf(after, apk)) {
-            assertNull(update.headers["CF-Access-Client-Id"])
-            assertNull(update.headers["CF-Access-Client-Secret"])
-            assertNull(update.headers["X-Life-OS-Actor"])
-        }
+        assertEquals(FakeTransport.TOKEN.clientId, before.headers["CF-Access-Client-Id"])
+        assertEquals(latestManifest, after.url)
+        assertEquals(githubApk, apk.url)
+        for (update in listOf(after, apk)) assertNoToken(update)
         assertTrue("everything else goes to the new server", tasks.url.startsWith("https://my-own.example.org/api/tasks/v1/tasks?"))
         assertEquals(FakeTransport.TOKEN.clientId, tasks.headers["CF-Access-Client-Id"])
     }
 
     @Test
-    fun `by default updates come from the build's update origin, not from the server`() = runBlocking {
+    fun `an app not connected yet checks GitHub`() = runBlocking {
+        transport.json(200, githubManifestJson)
+        assertEquals(UpdateSource.GitHubRepo(repo), clientOn { null }.updateManifest().source)
+        assertEquals(latestManifest, transport.requests.single().url)
+    }
+
+    @Test
+    fun `by default another server's updates come from the build's update repository`() = runBlocking {
         val client = LifeOsClient(transport, { Connection("https://my-own.example.org", FakeTransport.TOKEN) }, "ua", sleep = {})
-        transport.json(200, manifestJson)
-        client.updateManifest()
-        assertEquals(LifeOsEndpoints.UPDATES_URL + "/android/updates", transport.requests.single().url)
+        transport.json(200, githubManifestJson)
+        assertEquals(UpdateSource.GitHubRepo(LifeOsEndpoints.UPDATES_REPO), client.updateManifest().source)
+        assertEquals("https://github.com/${LifeOsEndpoints.UPDATES_REPO}/releases/latest/download/updates.json", transport.requests.single().url)
+    }
+
+    @Test
+    fun `nothing released on GitHub yet is a 404`() {
+        transport.html(404, "Not Found")
+        assertEquals(404, expect<LifeOsException.Api> { clientOn { "https://my-own.example.org" }.updateManifest() }.status)
+    }
+
+    @Test
+    fun `GitHub's redirects lead only to GitHub, and another host, another repository or plain http is refused before any request`() {
+        val refused = listOf(
+            "https://evil.example.com/updates.json",
+            "https://github.com/someone/else/releases/download/v1-1/updates.json",
+            "https://github.com/$repo/archive/main.zip",
+            "http://release-assets.githubusercontent.com/x",
+            "https://user@release-assets.githubusercontent.com/x",
+            "https://release-assets.githubusercontent.com:8443/x",
+            "https://release-assets.githubusercontent.com.evil.example/x",
+        )
+        for (location in refused) {
+            transport.requests.clear()
+            transport.redirect(302, location)
+            val error = expect<LifeOsException.Protocol> { clientOn { null }.updateManifest() }
+            assertTrue(error.message!!, error.message!!.contains("not GitHub's download of $repo"))
+            assertEquals("nothing was asked of $location", listOf(latestManifest), transport.requests.map { it.url })
+        }
+    }
+
+    @Test
+    fun `endless redirects end`() {
+        repeat(10) { transport.redirect(302, releaseManifest) }
+        expect<LifeOsException.Protocol> { clientOn { null }.updateManifest() }
+        assertEquals(6, transport.requests.size)
+    }
+
+    @Test
+    fun `a GitHub download keeps its range across the redirect, without the token`() = runBlocking {
+        val client = clientOn { "https://my-own.example.org" }
+        transport.redirect(302, assetHost).json(206, "rest", mapOf("content-range" to listOf("bytes 10-13/14")))
+        val out = java.io.ByteArrayOutputStream()
+        val response = client.download(githubApk, { _, _ -> out }, rangeStart = 10)
+        assertEquals(206, response.status)
+        assertEquals("rest", out.text())
+        assertEquals(listOf(githubApk, assetHost), transport.requests.map { it.url })
+        for (request in transport.requests) {
+            assertEquals("bytes=10-", request.headers["Range"])
+            assertNoToken(request)
+        }
+    }
+
+    @Test
+    fun `an APK address of no update source is refused without a request`() {
+        val refused = listOf(
+            "https://github.com/someone/else/releases/download/v0.4.6-13/lifeos-phone-0.4.6-13.apk",
+            "https://evil.example.com/android/lifeos-phone-0.4.6-13.apk",
+            "http://github.com/$repo/releases/download/v0.4.6-13/lifeos-phone-0.4.6-13.apk",
+            "https://github.com/$repo/releases/download/v0.4.6-13/other.apk",
+            "https://github.com/$repo/releases/download/../../x/lifeos-phone-0.4.6-13.apk",
+            "/api/tasks/v1/tasks",
+            "/android/../api/x.apk",
+        )
+        for (address in refused) {
+            expect<LifeOsException.Protocol> { clientOn { "https://lifeos.example.com" }.download(address, { _, _ -> java.io.ByteArrayOutputStream() }) }
+        }
+        assertTrue(transport.requests.isEmpty())
     }
 
     @Test

@@ -98,8 +98,24 @@ class WatchUpdateRulesTest {
 
     // ---- The phone: when to push
 
-    private fun plan(watch: WatchInfo = watch(), last: WatchPush? = null, manual: Boolean = false, manifest: UpdateManifest = this.manifest) =
-        WatchUpdateRules.plan(manifest, watch, last, now, manual)
+    private fun plan(
+        watch: WatchInfo = watch(),
+        last: WatchPush? = null,
+        manual: Boolean = false,
+        manifest: UpdateManifest = this.manifest,
+        source: UpdateSource = UpdateSource.UpdateOrigin,
+    ) = WatchUpdateRules.plan(manifest, source, watch, last, now, manual)
+
+    @Test
+    fun `a wear APK from GitHub Releases is pushed like one from the update origin, and only from its own source`() {
+        val github = UpdateSource.GitHubRepo("GAMch1k/life-os-app")
+        val fromGitHub = release.copy(url = "https://github.com/GAMch1k/life-os-app/releases/download/v0.4.0-5/lifeos-wear-0.4.0-5.apk")
+        assertEquals(WatchPlan.Push(fromGitHub), plan(manifest = UpdateManifest(1, apps = UpdateApps(wear = fromGitHub)), source = github))
+        assertTrue("an /android/ path in GitHub's manifest", plan(source = github) is WatchPlan.Unusable)
+        assertTrue("a GitHub address in the update origin's manifest", plan(manifest = UpdateManifest(1, apps = UpdateApps(wear = fromGitHub))) is WatchPlan.Unusable)
+        val otherRepo = release.copy(url = "https://github.com/someone/else/releases/download/v0.4.0-5/lifeos-wear-0.4.0-5.apk")
+        assertTrue("another repository's release", plan(manifest = UpdateManifest(1, apps = UpdateApps(wear = otherRepo)), source = github) is WatchPlan.Unusable)
+    }
 
     @Test
     fun `a newer wear version is pushed`() {

@@ -16,6 +16,7 @@ import com.gamch1k.lifeos.core.update.ApkRules
 import com.gamch1k.lifeos.core.update.ReleaseApp
 import com.gamch1k.lifeos.core.update.TransferMeter
 import com.gamch1k.lifeos.core.update.TransferProgress
+import com.gamch1k.lifeos.core.update.ReleaseDownloader
 import com.gamch1k.lifeos.core.update.UpdatePolicy
 import com.gamch1k.lifeos.core.update.WatchPlan
 import com.gamch1k.lifeos.core.update.WatchPush
@@ -31,7 +32,6 @@ import com.gamch1k.lifeos.core.wearlink.WatchInfo
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
 import com.gamch1k.lifeos.core.wearlink.WearLink
 import com.gamch1k.lifeos.phone.ui.Times
-import com.gamch1k.lifeos.phone.update.ReleaseDownloader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -62,7 +62,7 @@ data class WatchStatus(
 
 /** How the wear APK travels to the watch. */
 enum class WatchRoute(val label: String) {
-    /** The watch downloads it from Life OS itself, over a Wi-Fi network it asked Android for (transfer v2). */
+    /** The watch downloads it itself, from the update source, over a Wi-Fi network it asked Android for (transfer v2). */
     WIFI("over Wi-Fi"),
 
     /** The phone streams it over the Data Layer, which is Bluetooth while the watch is close. */
@@ -73,7 +73,7 @@ sealed interface WatchActivity {
     data object Idle : WatchActivity
     data object Checking : WatchActivity
 
-    /** The phone downloads the wear APK from Life OS. */
+    /** The phone downloads the wear APK from the update source. */
     data class Downloading(val release: AppRelease, val progress: TransferProgress) : WatchActivity
 
     /**
@@ -122,9 +122,10 @@ object WatchActivityText {
 /**
  * Updates the watch app through the phone (P19-06, docs/wear.md "Install and
  * updates"). When a check runs, it asks the watch its version over the Data
- * Layer, and when Life OS publishes a newer `apps.wear` it downloads the APK,
- * checks it (size, SHA-256, package, version, the release key), offers it to
- * the watch and streams it. The watch checks it again and installs it itself
+ * Layer, and when the update source (the update origin, or GitHub Releases:
+ * [com.gamch1k.lifeos.core.update.UpdateSource]) has a newer `apps.wear` it
+ * downloads the APK, checks it (size, SHA-256, package, version, the release
+ * key), offers it to the watch and streams it. The watch checks it again and installs it itself
  * with `USER_ACTION_NOT_REQUIRED`; it reports the result when it starts again.
  *
  * Checks run daily (with the phone's own update, on an unmetered network),
@@ -208,7 +209,7 @@ class WatchUpdateManager(
             return@withLock
         }
         remember(watch, now)
-        val manifest = try {
+        val (source, manifest) = try {
             client.updateManifest()
         } catch (e: CancellationException) {
             throw e
@@ -218,7 +219,7 @@ class WatchUpdateManager(
         }
         settings.edit { it[LAST_CHECK] = now.toString() }
         val last = prefs[PUSH]?.let { decode(WatchPush.serializer(), it) }
-        when (val plan = WatchUpdateRules.plan(manifest, watch, last, now, manual = trigger == Trigger.MANUAL)) {
+        when (val plan = WatchUpdateRules.plan(manifest, source, watch, last, now, manual = trigger == Trigger.MANUAL)) {
             is WatchPlan.UpToDate -> {
                 activity(WatchActivity.Note("The watch app is up to date."))
                 withIo { dir.deleteRecursively() }
@@ -252,15 +253,15 @@ class WatchUpdateManager(
      * with a readable message.
      */
     suspend fun prepareForSetup(onProgress: (Float) -> Unit): PreparedApk = mutex.withLock {
-        val manifest = try {
+        val (source, manifest) = try {
             client.updateManifest()
         } catch (error: LifeOsException) {
-            if (error is LifeOsException.Api && error.status == 404) throw IllegalStateException("nothing is published on Life OS yet")
+            if (error is LifeOsException.Api && error.status == 404) throw IllegalStateException("nothing is published yet at ${client.updateSource().describe()}")
             throw IllegalStateException(error.message ?: "the update check failed")
         }
         if (manifest.formatVersion != UpdatePolicy.FORMAT_VERSION) throw IllegalStateException("the update manifest has format ${manifest.formatVersion}")
         val release = ReleaseApp.WEAR.release(manifest) ?: throw IllegalStateException("no watch app is published yet")
-        UpdatePolicy.validate(ReleaseApp.WEAR, release)?.let { throw IllegalStateException("the published watch app is unusable: $it") }
+        UpdatePolicy.validate(ReleaseApp.WEAR, release, source)?.let { throw IllegalStateException("the published watch app is unusable: $it") }
         val file = when (val result = downloader.fetch(release, dir, fileName(release), onProgress)) {
             is ReleaseDownloader.Result.Ready -> result.file
             is ReleaseDownloader.Result.Failed -> throw IllegalStateException(result.message)

@@ -64,20 +64,25 @@ val appVersionCode: Int = versionProperties.getProperty("versionCode")?.toIntOrN
     ?.takeIf { it > 0 }
     ?: throw GradleException("version.properties: versionCode must be a positive integer")
 
-// ---- Servers: where the apps go (lifeos.serverUrl, lifeos.updatesUrl)
+// ---- Servers: where the apps go (lifeos.serverUrl, lifeos.updatesUrl, lifeos.updatesRepo)
 //
-// Two build settings, compiled into core's BuildConfig, which both apps read
+// Three build settings, compiled into core's BuildConfig, which both apps read
 // through core/…/config/LifeOsEndpoints.kt. Each is a Gradle property, else an
-// environment variable, else the official Life OS server:
+// environment variable, else the official Life OS server or repository:
 //
-//   lifeos.serverUrl   LIFE_OS_PUBLIC_URL   the server the phone offers at
-//                                           onboarding; the owner may change
-//                                           it in the app at any time
-//   lifeos.updatesUrl  LIFE_OS_UPDATES_URL  where the phone and the watch get
-//                                           app updates, whatever server the
-//                                           owner chose
+//   lifeos.serverUrl    LIFE_OS_PUBLIC_URL    the server the phone offers at
+//                                             onboarding; the owner may change
+//                                             it in the app at any time
+//   lifeos.updatesUrl   LIFE_OS_UPDATES_URL   where the phone and the watch get
+//                                             app updates while the app is
+//                                             connected to that server
+//   lifeos.updatesRepo  LIFE_OS_UPDATES_REPO  the GitHub repository whose
+//                                             Releases they update from
+//                                             otherwise (another server, or
+//                                             none yet)
 //
-// Each must be an https:// origin: a host and perhaps a port, nothing after it.
+// The first two must be https:// origins: a host and perhaps a port, nothing
+// after it. The third is owner/name, such as GAMch1k/life-os-app.
 
 val officialServerUrl = "https://lifeos.gamch1k.com"
 
@@ -96,6 +101,18 @@ fun originSetting(property: String, variable: String): String {
 
 val lifeosServerUrl: String by extra(originSetting("lifeos.serverUrl", "LIFE_OS_PUBLIC_URL"))
 val lifeosUpdatesUrl: String by extra(originSetting("lifeos.updatesUrl", "LIFE_OS_UPDATES_URL"))
+
+val officialUpdatesRepo = "GAMch1k/life-os-app"
+
+fun repoSetting(property: String, variable: String): String {
+    val value = listOf(providers.gradleProperty(property), providers.environmentVariable(variable))
+        .firstNotNullOfOrNull { setting -> setting.orNull?.trim()?.takeIf { it.isNotEmpty() } }
+        ?: return officialUpdatesRepo
+    return value.takeIf { Regex("""[A-Za-z0-9-]+/[A-Za-z0-9._-]+""").matches(it) && ".." !in it }
+        ?: throw GradleException("$property ($variable) must be a GitHub repository, owner/name such as $officialUpdatesRepo")
+}
+
+val lifeosUpdatesRepo: String by extra(repoSetting("lifeos.updatesRepo", "LIFE_OS_UPDATES_REPO"))
 
 // ---- Release signing
 //
