@@ -58,6 +58,9 @@ class DirectDownloadTest {
 
         /** Breaks the connection after this many body bytes. */
         var breakAfter: Int? = null
+
+        /** Addresses that answer with a redirect to another, as GitHub's release downloads do. */
+        val redirects = mutableMapOf<String, String>()
         val requests = mutableListOf<Pair<String, Map<String, String>>>()
         val networks = mutableListOf<Long>()
 
@@ -71,6 +74,11 @@ class DirectDownloadTest {
         ): Int {
             requests += url to headers
             networks += network.handle
+            redirects[url]?.let { location ->
+                // As CronetApkHttp reports a redirect: its status and where it leads, and no body.
+                sink(302, mapOf("location" to listOf(location)))
+                return 302
+            }
             status?.let { fixed ->
                 assertNull("an error answer has no body to keep", sink(fixed, emptyMap()))
                 return fixed
@@ -196,6 +204,100 @@ class DirectDownloadTest {
         val direct = DirectDownload(FakeNetworks(), http, userAgent = "LifeOS-Wear/test")
         fetch(direct, partial(), credentials = WearCredentials("https://my-own.example.org", "own.access", "own-secret"))
         assertEquals(LifeOsEndpoints.UPDATES_URL + url, http.requests.single().first)
+    }
+
+    // ---- GitHub Releases (P20-06): an app not connected to the update origin
+
+    private val repo = "GAMch1k/life-os-app"
+    private val githubUrl = "https://github.com/$repo/releases/download/v0.4.6-13/lifeos-wear-0.4.6-13.apk"
+    private val assetHost = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r&sig=x"
+
+    private fun fromGitHub(networks: WifiNetworks, http: ApkHttp) =
+        DirectDownload(networks, http, userAgent = "LifeOS-Wear/test", updatesUrl = "https://lifeos.example.com", updatesRepo = repo, wifiTimeoutMillis = 45_000)
+
+    @Test
+    fun `a wear APK of a GitHub release is worth trying without a token, another repository's never`() {
+        assertTrue(DirectDownload.worthTrying(githubUrl, null, held = 0, size = size, repo = repo))
+        assertTrue(DirectDownload.worthTrying(githubUrl, token, held = 0, size = size, repo = repo))
+        assertFalse(DirectDownload.worthTrying(githubUrl.replace(repo, "someone/else"), token, 0, size, repo = repo))
+        assertFalse("the phone's APK", DirectDownload.worthTrying(githubUrl.replace("wear", "phone"), token, 0, size, repo = repo))
+        assertFalse(DirectDownload.worthTrying(githubUrl.replace("https://", "http://"), token, 0, size, repo = repo))
+    }
+
+    @Test
+    fun `the APK comes from GitHub through its redirect, with no token, the range kept`() {
+        val http = FakeHttp().apply { redirects[githubUrl] = assetHost }
+        val partial = partial()
+        val seen = Seen()
+        assertEquals(DirectDownload.Outcome.Downloaded, fetch(fromGitHub(FakeNetworks(), http), partial, seen, url = githubUrl, credentials = token))
+        assertArrayEquals(apk, taken(partial))
+        assertEquals(listOf(githubUrl, assetHost), http.requests.map { it.first })
+        for ((_, headers) in http.requests) {
+            assertNull("no token goes to GitHub", headers["CF-Access-Client-Id"])
+            assertNull(headers["CF-Access-Client-Secret"])
+            assertEquals("LifeOS-Wear/test", headers["User-Agent"])
+        }
+        assertEquals(size, seen.positions.last())
+
+        // A download that broke off resumes from GitHub too.
+        val broken = FakeHttp().apply {
+            redirects[githubUrl] = assetHost
+            breakAfter = 100_000
+        }
+        val resumed = partial()
+        resumed.discard()
+        assertTrue(fetch(fromGitHub(FakeNetworks(), broken), resumed, url = githubUrl, credentials = null) is DirectDownload.Outcome.Failed)
+        broken.breakAfter = null
+        broken.requests.clear()
+        assertEquals(DirectDownload.Outcome.Downloaded, fetch(fromGitHub(FakeNetworks(), broken), resumed, url = githubUrl, credentials = null))
+        assertTrue(broken.requests.all { it.second["Range"]?.startsWith("bytes=") == true })
+        assertArrayEquals(apk, taken(resumed))
+    }
+
+    @Test
+    fun `a redirect away from GitHub is never followed`() {
+        val http = FakeHttp().apply { redirects[githubUrl] = "https://evil.example.com/lifeos-wear.apk" }
+        val outcome = fetch(fromGitHub(FakeNetworks(), http), partial(), url = githubUrl, credentials = null)
+        assertEquals(DirectDownload.Outcome.Failed("GitHub sent the download to evil.example.com, which is not GitHub's download of $repo"), outcome)
+        assertEquals(listOf(githubUrl), http.requests.map { it.first })
+    }
+
+    @Test
+    fun `endless redirects end`() {
+        val http = FakeHttp().apply { redirects[githubUrl] = githubUrl }
+        assertTrue(fetch(fromGitHub(FakeNetworks(), http), partial(), url = githubUrl, credentials = null) is DirectDownload.Outcome.Failed)
+        assertEquals(6, http.requests.size)
+    }
+
+    @Test
+    fun `a file from GitHub with another SHA-256 is thrown away`() {
+        val http = FakeHttp().apply {
+            redirects[githubUrl] = assetHost
+            body = apk.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        }
+        val partial = partial()
+        assertEquals(
+            DirectDownload.Outcome.Failed("the downloaded file's SHA-256 is not the announced one"),
+            fetch(fromGitHub(FakeNetworks(), http), partial, url = githubUrl, credentials = null),
+        )
+        assertEquals("the next try starts from byte 0", 0L, partial.offset(sha, size))
+    }
+
+    @Test
+    fun `an address of another repository or site is not tried at all`() {
+        for (url in listOf(githubUrl.replace(repo, "someone/else"), "https://evil.example.com/android/lifeos-wear-0.4.6-13.apk")) {
+            val networks = FakeNetworks()
+            assertEquals(DirectDownload.Outcome.Skipped("no download address"), fetch(fromGitHub(networks, FakeHttp()), partial(), url = url, credentials = token))
+            assertTrue("no Wi-Fi was even asked for", networks.asked.isEmpty())
+        }
+    }
+
+    @Test
+    fun `an Access redirect on the update origin is still never followed`() {
+        val http = FakeHttp().apply { redirects["https://lifeos.example.com$url"] = "https://team.cloudflareaccess.com/cdn-cgi/access/login" }
+        val outcome = fetch(fromGitHub(FakeNetworks(), http), partial(), url = url, credentials = token)
+        assertEquals(DirectDownload.Outcome.Failed("Life OS answered 302 (Cloudflare Access did not let the watch's token in)"), outcome)
+        assertEquals(1, http.requests.size)
     }
 
     // ---- Resuming
