@@ -155,8 +155,11 @@ class CronetApkHttp(context: Context) : ApkHttp {
         }
 
         override fun onRedirectReceived(request: UrlRequest, info: UrlResponseInfo, newLocationUrl: String) {
-            // Never follow: a redirect means Cloudflare Access wants a login.
+            // Never followed here: on Life OS a redirect means Cloudflare Access wants a login. The
+            // caller sees the status and where it led (DirectDownload follows GitHub's own redirects).
             status = info.httpStatusCode
+            val headers = info.allHeaders.entries.groupBy({ it.key.lowercase() }, { it.value }).mapValues { (_, lists) -> lists.flatten() }
+            runCatching { sink(status, headers + ("location" to listOf(newLocationUrl)))?.close() }
             request.cancel()
         }
 

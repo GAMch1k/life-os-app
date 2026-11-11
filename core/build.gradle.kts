@@ -3,10 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// The default server and the update origin: the build settings
-// lifeos.serverUrl and lifeos.updatesUrl, resolved in the root build.gradle.kts.
+// The default server, the update origin and the update repository: the build
+// settings lifeos.serverUrl, lifeos.updatesUrl and lifeos.updatesRepo,
+// resolved in the root build.gradle.kts.
 val lifeosServerUrl: String by rootProject.extra
 val lifeosUpdatesUrl: String by rootProject.extra
+val lifeosUpdatesRepo: String by rootProject.extra
 
 android {
     namespace = "com.gamch1k.lifeos.core"
@@ -19,6 +21,7 @@ android {
         // Read through LifeOsEndpoints, which both apps use.
         buildConfigField("String", "SERVER_URL", "\"$lifeosServerUrl\"")
         buildConfigField("String", "UPDATES_URL", "\"$lifeosUpdatesUrl\"")
+        buildConfigField("String", "UPDATES_REPO", "\"$lifeosUpdatesRepo\"")
     }
 
     buildFeatures {

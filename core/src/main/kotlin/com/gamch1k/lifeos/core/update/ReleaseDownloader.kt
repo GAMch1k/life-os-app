@@ -1,20 +1,20 @@
-package com.gamch1k.lifeos.phone.update
+package com.gamch1k.lifeos.core.update
 
 import com.gamch1k.lifeos.core.api.AppRelease
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
-import com.gamch1k.lifeos.core.update.ApkIntegrity
-import com.gamch1k.lifeos.core.update.UpdatePolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Downloads a release's APK from the update origin (LifeOsClient.download)
- * into a directory of its own, resuming a partial file, and keeps it only when its
- * size and SHA-256 are the manifest's. Used for the phone's own update and
- * for the wear APK the phone sends to the watch.
+ * Downloads a release's APK from its source (LifeOsClient.download: the
+ * update origin, or a GitHub release) into a directory of its own, resuming a
+ * partial file, and keeps it only when its size and SHA-256 are the
+ * manifest's. Used on the phone for its own update and for the wear APK it
+ * sends to the watch; the package, version and signer are checked after it
+ * ([ApkRules]).
  */
 class ReleaseDownloader(private val client: LifeOsClient) {
     sealed interface Result {

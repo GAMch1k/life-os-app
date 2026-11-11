@@ -125,12 +125,12 @@ object WatchUpdateRules {
     // ---- The phone
 
     /**
-     * What to do for [watch] (what it last reported) given the [manifest].
-     * [manual] is the owner's "Update now": it skips the backoff and the wait
-     * for a result, never the battery rule or Android's 30 seconds.
+     * What to do for [watch] (what it last reported) given the [manifest] of
+     * [source]. [manual] is the owner's "Update now": it skips the backoff and
+     * the wait for a result, never the battery rule or Android's 30 seconds.
      */
-    fun plan(manifest: UpdateManifest, watch: WatchInfo, last: WatchPush?, now: Instant, manual: Boolean): WatchPlan {
-        val decision = UpdatePolicy.decide(ReleaseApp.WEAR, manifest, watch.versionCode, watch.sdkInt)
+    fun plan(manifest: UpdateManifest, source: UpdateSource, watch: WatchInfo, last: WatchPush?, now: Instant, manual: Boolean): WatchPlan {
+        val decision = UpdatePolicy.decide(ReleaseApp.WEAR, manifest, watch.versionCode, watch.sdkInt, source)
         val release = when (decision) {
             is UpdateDecision.UpToDate -> return WatchPlan.UpToDate(decision.published)
             is UpdateDecision.UnsupportedFormat -> return WatchPlan.Unusable("the update manifest has format ${decision.formatVersion}; this app reads ${UpdatePolicy.FORMAT_VERSION}")

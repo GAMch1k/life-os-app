@@ -20,7 +20,7 @@ sealed interface UpdateDecision {
     /** A manifest format this app does not understand (formatVersion other than 1). */
     data class UnsupportedFormat(val formatVersion: Int) : UpdateDecision
 
-    /** The entry is unusable (bad SHA-256, size, or URL); never downloaded. */
+    /** The entry is unusable (bad SHA-256, size, or URL, or a URL of another source); never downloaded. */
     data class Invalid(val reason: String) : UpdateDecision
 }
 
@@ -40,7 +40,10 @@ enum class ReleaseApp(val key: String) {
  * The update rules of docs/operations/android-releases.md in the life-os
  * repository: install an app's entry (`apps.phone` on the phone, `apps.wear`
  * for the watch) only if its versionCode is greater than the installed one
- * and the device's API level is at least its minSdk.
+ * and the device's API level is at least its minSdk, and only from an address
+ * of the [UpdateSource] the manifest came from: a path under `/android/` on
+ * the update origin, or an asset of a GitHub release of the update
+ * repository. Any other address is refused before a byte is downloaded.
  */
 object UpdatePolicy {
     const val FORMAT_VERSION = 1
@@ -48,29 +51,40 @@ object UpdatePolicy {
 
     private fun apkPath(app: ReleaseApp) = Regex("^/android/lifeos-${app.key}-[0-9A-Za-z][0-9A-Za-z._+-]*-[0-9]+\\.apk$")
 
-    /** The phone app's own update. */
-    fun decide(manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int): UpdateDecision =
-        decide(ReleaseApp.PHONE, manifest, installedVersionCode, sdkInt)
+    /** The phone app's own update, from a manifest of [source]. */
+    fun decide(manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int, source: UpdateSource): UpdateDecision =
+        decide(ReleaseApp.PHONE, manifest, installedVersionCode, sdkInt, source)
 
     /**
-     * [app]'s entry against the installed [installedVersionCode] on a device
-     * with [sdkInt] (for the watch: the version and API level it reports).
+     * [app]'s entry of a manifest of [source] against the installed
+     * [installedVersionCode] on a device with [sdkInt] (for the watch: the
+     * version and API level it reports). A lower or equal versionCode is
+     * never offered (no downgrade, whatever the source).
      */
-    fun decide(app: ReleaseApp, manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int): UpdateDecision {
+    fun decide(app: ReleaseApp, manifest: UpdateManifest, installedVersionCode: Long, sdkInt: Int, source: UpdateSource): UpdateDecision {
         if (manifest.formatVersion != FORMAT_VERSION) return UpdateDecision.UnsupportedFormat(manifest.formatVersion)
         val release = app.release(manifest) ?: return UpdateDecision.UpToDate(null)
         if (release.versionCode <= installedVersionCode) return UpdateDecision.UpToDate(release)
-        validate(app, release)?.let { return UpdateDecision.Invalid(it) }
+        validate(app, release, source)?.let { return UpdateDecision.Invalid(it) }
         if (sdkInt < release.minSdk) return UpdateDecision.NeedsNewerAndroid(release)
         return UpdateDecision.Available(release)
     }
 
-    /** Why [release] can't be downloaded at all, or null when its hash, size and URL are usable. */
-    fun validate(app: ReleaseApp, release: AppRelease): String? = when {
+    /** Why [release] of a manifest of [source] can't be downloaded at all, or null when its hash, size and URL are usable. */
+    fun validate(app: ReleaseApp, release: AppRelease, source: UpdateSource): String? = when {
         !SHA256.matches(release.sha256) -> "the SHA-256 is not 64 lowercase hex digits"
         release.size <= 0 -> "the size is not positive"
-        !apkPath(app).matches(release.url) || ".." in release.url -> "the URL is not a ${app.key} APK under /android/"
+        !isApkUrl(app, release.url, source) -> when (source) {
+            UpdateSource.UpdateOrigin -> "the URL is not a ${app.key} APK under /android/"
+            is UpdateSource.GitHubRepo -> "the URL is not a ${app.key} APK of a ${source.repo} release on GitHub"
+        }
         else -> null
+    }
+
+    /** Whether [url] is one of [app]'s APKs at [source]: a path under `/android/`, or an asset of a release on GitHub. */
+    fun isApkUrl(app: ReleaseApp, url: String, source: UpdateSource): Boolean = when (source) {
+        UpdateSource.UpdateOrigin -> isApkPath(app, url)
+        is UpdateSource.GitHubRepo -> GitHubReleases.isApkUrl(source.repo, app, url)
     }
 
     /** Whether [url] is the path of one of [app]'s APKs under `/android/` (the watch checks the phone's offer with it). */

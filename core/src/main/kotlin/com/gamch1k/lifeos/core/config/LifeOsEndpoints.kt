@@ -5,8 +5,9 @@ import java.net.URI
 
 /**
  * Where Life OS lives on the internet (behind Cloudflare and Cloudflare Access).
- * Two build settings decide it (README, "Servers"), for the phone and the
- * watch app alike; both default to the official server, `https://lifeos.gamch1k.com`.
+ * Build settings decide it (README, "Servers"), for the phone and the watch
+ * app alike: the server and the update origin default to the official server,
+ * `https://lifeos.gamch1k.com`, the update repository to `GAMch1k/life-os-app`.
  */
 object LifeOsEndpoints {
     /**
@@ -17,11 +18,19 @@ object LifeOsEndpoints {
     val SERVER_URL: String = BuildConfig.SERVER_URL
 
     /**
-     * Where app updates come from (`lifeos.updatesUrl`): the phone's manifest
-     * and APKs, and the watch's own APK download. Never the saved server, so
-     * switching servers never switches the update source.
+     * Where app updates come from while the app is connected to it
+     * (`lifeos.updatesUrl`): the phone's manifest and APKs, and the watch's
+     * own APK download, at `/android/`. Never another saved server: an app
+     * connected to one updates from [UPDATES_REPO] instead
+     * ([com.gamch1k.lifeos.core.update.UpdateSource]).
      */
     val UPDATES_URL: String = BuildConfig.UPDATES_URL
+
+    /**
+     * The GitHub repository, `owner/name`, whose Releases the apps update from
+     * when they are not connected to [UPDATES_URL] (`lifeos.updatesRepo`).
+     */
+    val UPDATES_REPO: String = BuildConfig.UPDATES_REPO
 
     /** [server]'s host name, such as `lifeos.example.com`: the name the network check looks up. */
     fun host(server: String): String = URI(server).host

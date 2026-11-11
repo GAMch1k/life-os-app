@@ -100,9 +100,11 @@ data class ApkOffer(
     /** The highest [TransferVersion] the phone speaks; absent (1) from a 0.4.0–0.4.2 phone. */
     val transfer: Int = TransferVersion.V1,
     /**
-     * v2: the APK's path on Life OS (`apps.wear.url` of `/android/updates`, such as
-     * `/android/lifeos-wear-0.4.3-10.apk`), so the watch may download it itself over Wi-Fi.
-     * Null: only through the phone.
+     * v2: where the phone found the APK (`apps.wear.url` of the manifest), so the watch may
+     * download it itself over Wi-Fi: a path on the update origin such as
+     * `/android/lifeos-wear-0.4.3-10.apk`, or, since 0.4.6, an asset of a GitHub release of
+     * the update repository (P20-06), which a 0.4.3–0.4.5 watch doesn't try (it gets the
+     * stream). Null: only through the phone.
      */
     val url: String? = null,
 )

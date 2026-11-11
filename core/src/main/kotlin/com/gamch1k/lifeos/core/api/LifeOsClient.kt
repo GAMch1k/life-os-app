@@ -2,6 +2,11 @@ package com.gamch1k.lifeos.core.api
 
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.secrets.ServiceToken
+import com.gamch1k.lifeos.core.update.FetchedManifest
+import com.gamch1k.lifeos.core.update.GitHubReleases
+import com.gamch1k.lifeos.core.update.ReleaseApp
+import com.gamch1k.lifeos.core.update.UpdatePolicy
+import com.gamch1k.lifeos.core.update.UpdateSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.KSerializer
@@ -31,15 +36,18 @@ class Connection(val baseUrl: String, val token: ServiceToken) {
  * `Idempotency-Key`) are retried a few times on errors that may pass
  * ([LifeOsException.retryable]); the rest is left to the capture queue.
  *
- * App updates ([updateManifest], [download]) come from [updatesUrl], the
- * update origin, never from the owner's server; the token goes along only
- * when that origin is the owner's server.
+ * App updates ([updateManifest], [download]) come from [updateSource]:
+ * [updatesUrl], the update origin, with the token, while the app is
+ * connected to that server; otherwise GitHub Releases of [updatesRepo],
+ * with no token and redirects followed only to GitHub's own hosts. Never
+ * from another server.
  */
 class LifeOsClient(
     private val transport: HttpTransport,
     private val connection: suspend () -> Connection?,
     private val userAgent: String,
     private val updatesUrl: String = LifeOsEndpoints.UPDATES_URL,
+    private val updatesRepo: String = LifeOsEndpoints.UPDATES_REPO,
     private val retryDelaysMillis: List<Long> = listOf(700, 2_500),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -173,29 +181,64 @@ class LifeOsClient(
         exchange("GET", "/api/tasks/v1/tasks", listOf("limit" to "1"), null, idempotent = false, candidate = candidate)
     }
 
-    /** The update manifest, `GET /android/updates` on the update origin. */
-    suspend fun updateManifest(): UpdateManifest =
-        decode("/android/updates", exchange("GET", "/android/updates", emptyList(), null, idempotent = true, update = true), UpdateManifest.serializer())
+    /** Where updates come from now ([UpdateSource.choose] for the server in use). */
+    suspend fun updateSource(): UpdateSource = UpdateSource.choose(connection()?.baseUrl, updatesUrl, updatesRepo)
 
     /**
-     * Downloads [path] (an APK of the manifest, on the update origin) into
-     * [sink]. [rangeStart] asks for the rest of a partial file
-     * (`Range: bytes=n-`); the server may still answer 200.
+     * The update manifest and its source: `GET /android/updates` on the update
+     * origin, or the latest GitHub release's `updates.json`. A 404 (as
+     * [LifeOsException.Api]) means nothing is published there yet.
      */
-    suspend fun download(path: String, sink: ResponseSink, rangeStart: Long? = null, onProgress: ((Long) -> Unit)? = null): HttpResponse =
-        exchange(
-            "GET",
-            path,
-            emptyList(),
-            null,
-            idempotent = false,
-            update = true,
-            accept = "*/*",
-            extraHeaders = rangeStart?.let { mapOf("Range" to "bytes=$it-") } ?: emptyMap(),
-            sink = sink,
-            onProgress = onProgress,
-            timeoutMillis = 15 * 60_000L,
-        )
+    suspend fun updateManifest(): FetchedManifest {
+        val source = updateSource()
+        val (address, response) = when (source) {
+            UpdateSource.UpdateOrigin ->
+                "/android/updates" to exchange("GET", "/android/updates", emptyList(), null, idempotent = true, update = true)
+            is UpdateSource.GitHubRepo -> {
+                val url = GitHubReleases.manifestUrl(source.repo)
+                url to fromGitHub(source.repo, url, idempotent = true, accept = "application/json")
+            }
+        }
+        return FetchedManifest(source, decode(address, response, UpdateManifest.serializer()))
+    }
+
+    /**
+     * Downloads [path], an APK of the manifest, into [sink]: a path under
+     * `/android/` from the update origin, or an asset of a GitHub release of
+     * the update repository. Any other address is refused
+     * ([LifeOsException.Protocol]) without a request. [rangeStart] asks for
+     * the rest of a partial file (`Range: bytes=n-`); the server may still
+     * answer 200.
+     */
+    suspend fun download(path: String, sink: ResponseSink, rangeStart: Long? = null, onProgress: ((Long) -> Unit)? = null): HttpResponse {
+        val range = rangeStart?.let { mapOf("Range" to "bytes=$it-") } ?: emptyMap()
+        return when {
+            ReleaseApp.entries.any { UpdatePolicy.isApkPath(it, path) } -> exchange(
+                "GET",
+                path,
+                emptyList(),
+                null,
+                idempotent = false,
+                update = true,
+                accept = "*/*",
+                extraHeaders = range,
+                sink = sink,
+                onProgress = onProgress,
+                timeoutMillis = DOWNLOAD_TIMEOUT_MILLIS,
+            )
+            GitHubReleases.isApkUrl(updatesRepo, path) -> fromGitHub(
+                updatesRepo,
+                path,
+                idempotent = false,
+                accept = "*/*",
+                extraHeaders = range,
+                sink = sink,
+                onProgress = onProgress,
+                timeoutMillis = DOWNLOAD_TIMEOUT_MILLIS,
+            )
+            else -> throw LifeOsException.Protocol("$path is not an address updates may come from")
+        }
+    }
 
     // ---- Relay (the watch's requests through the phone)
 
@@ -286,10 +329,67 @@ class LifeOsClient(
             body = body,
             timeoutMillis = timeoutMillis,
         )
+        return perform(request, idempotent, sink, onProgress)
+    }
+
+    /**
+     * A GET of [url] on GitHub for [repo]'s releases: no token and no Life OS
+     * header, only `Accept`, `User-Agent` and [extraHeaders] (a `Range`), on
+     * every hop. Redirects are followed, at most [GitHubReleases.MAX_REDIRECTS],
+     * and only to [GitHubReleases.mayRedirectTo]; any other is
+     * [LifeOsException.Protocol] before a request goes there.
+     */
+    private suspend fun fromGitHub(
+        repo: String,
+        url: String,
+        idempotent: Boolean,
+        accept: String,
+        extraHeaders: Map<String, String> = emptyMap(),
+        sink: ResponseSink? = null,
+        onProgress: ((Long) -> Unit)? = null,
+        timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+    ): HttpResponse {
+        var address = url
+        var redirects = 0
+        while (true) {
+            val request = HttpRequest(
+                method = "GET",
+                url = address,
+                headers = buildMap {
+                    put("Accept", accept)
+                    put("User-Agent", userAgent)
+                    putAll(extraHeaders)
+                },
+                timeoutMillis = timeoutMillis,
+            )
+            val response = perform(request, idempotent, sink, onProgress, redirects = true)
+            if (response.status !in 300..399) return response
+            val next = response.redirectLocation?.let { GitHubReleases.resolve(address, it) }
+            if (next == null || !GitHubReleases.mayRedirectTo(repo, next)) {
+                throw LifeOsException.Protocol("GitHub sent the update to ${GitHubReleases.host(next)}, which is not GitHub's download of $repo")
+            }
+            if (++redirects > GitHubReleases.MAX_REDIRECTS) throw LifeOsException.Protocol("GitHub redirected the update more than ${GitHubReleases.MAX_REDIRECTS} times")
+            address = next
+        }
+    }
+
+    /**
+     * Sends [request], retrying an [idempotent] one on errors that may pass,
+     * and turns an answer that is not a success into a [LifeOsException]; a
+     * 3xx is returned as it is when [redirects] (the caller follows it).
+     */
+    private suspend fun perform(
+        request: HttpRequest,
+        idempotent: Boolean,
+        sink: ResponseSink?,
+        onProgress: ((Long) -> Unit)?,
+        redirects: Boolean = false,
+    ): HttpResponse {
         var attempt = 0
         while (true) {
             val failure = try {
-                return checked(transport.execute(request, sink, onProgress))
+                val response = transport.execute(request, sink, onProgress)
+                return if (redirects && response.status in 300..399) response else checked(response)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: LifeOsException) {
@@ -317,6 +417,9 @@ class LifeOsClient(
 
     companion object {
         const val DEFAULT_TIMEOUT_MILLIS = 30_000L
+
+        /** One APK download, from the first byte to the last. */
+        const val DOWNLOAD_TIMEOUT_MILLIS = 15 * 60_000L
 
         /** An upload gets 30 s plus a second for every 32 KiB, at most 10 minutes. */
         fun uploadTimeout(bytes: Long): Long = (DEFAULT_TIMEOUT_MILLIS + bytes / 32).coerceAtMost(10 * 60_000L)

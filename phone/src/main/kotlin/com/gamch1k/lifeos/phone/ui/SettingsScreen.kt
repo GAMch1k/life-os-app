@@ -45,6 +45,7 @@ import com.gamch1k.lifeos.phone.watch.WatchActivity
 import com.gamch1k.lifeos.phone.watch.WatchActivityText
 import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
 import com.gamch1k.lifeos.phone.watch.WatchUpdateService
+import com.gamch1k.lifeos.core.update.UpdateSource
 import com.gamch1k.lifeos.core.update.WatchAbi
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateResult
 import com.gamch1k.lifeos.core.wearlink.WatchUpdateStatus
@@ -164,7 +165,8 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                     updateActionLabel(state.update)?.let { label -> Button(onClick = viewModel::updateAction) { Text(label) } }
                 }
                 Text(
-                    "Life OS checks when it starts and once a day on Wi-Fi; installing needs \"Install unknown apps\" for Life OS. " +
+                    "Updates come from ${UpdateSource.choose(state.server).describe()}. " +
+                        "Life OS checks when it starts and once a day on Wi-Fi; installing needs \"Install unknown apps\" for Life OS. " +
                         "The first update after installing from your browser asks you to confirm once; " +
                         "after that, updates install without asking.",
                     style = MaterialTheme.typography.bodySmall,
