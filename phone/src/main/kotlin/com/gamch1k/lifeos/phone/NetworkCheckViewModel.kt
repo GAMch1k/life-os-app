@@ -22,6 +22,8 @@ data class NetworkCheckUiState(
     val quicAllowed: Boolean = false,
     val result: NetworkCheckResult? = null,
     val token: MaskedToken? = null,
+    /** The phone is paired: step 4 carries its device key too (never shown). */
+    val paired: Boolean = false,
     val error: String? = null,
 )
 
@@ -33,8 +35,8 @@ class NetworkCheckViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         viewModelScope.launch {
-            val token = tokens.current()?.token
-            state.update { it.copy(token = token?.masked()) }
+            val connection = tokens.current()
+            state.update { it.copy(token = connection?.token?.masked(), paired = connection?.deviceKey != null) }
         }
     }
 
@@ -50,7 +52,7 @@ class NetworkCheckViewModel(application: Application) : AndroidViewModel(applica
                 val connection = tokens.current()
                 val server = connection?.baseUrl ?: tokens.serverUrl()
                 val appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-                val result = check.run(server = server, appVersion = appVersion, quicAllowed = quic, token = connection?.token)
+                val result = check.run(server = server, appVersion = appVersion, quicAllowed = quic, token = connection?.token, deviceKey = connection?.deviceKey)
                 state.update { it.copy(running = false, result = result, error = null) }
             } catch (cancelled: CancellationException) {
                 throw cancelled

@@ -36,7 +36,22 @@ data class HomeUiState(
     val waiting: Int = 0,
     val failed: Int = 0,
     val update: UpdateState = UpdateState.Idle,
+    /** P21-06: "no longer connected", or the offer to pair; null when there is nothing to say. */
+    val pairNotice: PairNotice? = null,
+    /** Modules the account may not use here ("Tasks", "Calendar"): their part of Today is left out. */
+    val notAllowed: Set<String> = emptySet(),
 )
+
+enum class PairNotice {
+    /** Life OS refused the phone's key (401): pair again. */
+    NO_LONGER_CONNECTED,
+
+    /** Life OS asks for a sign-in and the phone has no key (legacy access is off): pair. */
+    PAIRING_REQUIRED,
+
+    /** Connected with the service token alone (legacy access): pairing is offered, not forced. */
+    OFFER,
+}
 
 /** A snackbar: [undoTaskId] adds Undo (reopen the Task just completed). */
 data class HomeMessage(val text: String, val undoTaskId: String? = null)
@@ -61,8 +76,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val loading = combine(refreshing, error) { busy, failure -> busy to failure }
 
-    val uiState: StateFlow<HomeUiState> = combine(snapshot, hidden, loading, graph.captures.captures, combine(graph.updates.state, minute) { u, m -> u to m }) {
-            current, hiddenIds, (busy, failure), captures, (update, now) ->
+    /** What Home says about pairing (P21-06), and the modules the account may not use. */
+    private val account = combine(graph.tokens.connection, graph.tokens.pairing, graph.tokens.pairPromptDismissed, graph.today.notAllowed, error) {
+            connection, pairing, dismissed, notAllowed, failure ->
+        val notice = when {
+            connection == null -> null
+            pairing?.refused == true -> PairNotice.NO_LONGER_CONNECTED
+            failure is LifeOsException.SignInRequired && !failure.keySent -> PairNotice.PAIRING_REQUIRED
+            pairing == null && !dismissed -> PairNotice.OFFER
+            else -> null
+        }
+        notice to notAllowed
+    }
+
+    val uiState: StateFlow<HomeUiState> = combine(snapshot, hidden, loading, graph.captures.captures, combine(graph.updates.state, minute, account) { u, m, a -> Triple(u, m, a) }) {
+            current, hiddenIds, (busy, failure), captures, (update, now, accountState) ->
         val zone = ZoneId.systemDefault()
         val recent = captures.maxByOrNull { it.createdAt }?.takeIf { Duration.between(Instant.parse(it.createdAt), now) < RECENT }
         HomeUiState(
@@ -74,6 +102,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             waiting = captures.count { it.status == CaptureStatus.PENDING || it.status == CaptureStatus.SENDING },
             failed = captures.count { it.status == CaptureStatus.FAILED },
             update = update,
+            pairNotice = accountState.first,
+            notAllowed = accountState.second,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 
@@ -120,6 +150,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 messageChannel.send(HomeMessage("Not marked done: ${failure.message}"))
             }
         }
+    }
+
+    /** Home's "Not now" on the offer to pair: Settings › Account keeps offering it. */
+    fun dismissPairOffer() {
+        viewModelScope.launch { graph.tokens.dismissPairPrompt() }
     }
 
     fun undo(taskId: String) {

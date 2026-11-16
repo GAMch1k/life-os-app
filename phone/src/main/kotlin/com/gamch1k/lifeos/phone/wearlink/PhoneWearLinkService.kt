@@ -28,8 +28,9 @@ import kotlinx.coroutines.tasks.await
  * a `/lifeos/` path; the relay's work is [PhoneWearLinkHandler]'s, the watch's
  * update reports go to the app's WatchUpdateManager.
  *
- * The token source and the relay come from the app's `Application`, which
- * implements [WearLinkHost] since 0.3.0. The fallback without it: the token
+ * The credentials and the relay come from the app's `Application`, which
+ * implements [WearLinkHost] since 0.3.0 (since 0.5.0 the watch's own device
+ * key once the phone is paired). The fallback without it: the token
  * store's server and token through [ServiceTokenStore], and no relay (the
  * watch then calls Life OS directly).
  */
@@ -86,10 +87,10 @@ class PhoneWearLinkService : WearableListenerService() {
         }
     }
 
-    // Only without a WearLinkHost: the server and token entered at onboarding or under Settings.
+    // Only without a WearLinkHost: the server and token entered at onboarding or under Settings (never a key).
     private fun fallbackTokenSource() = WearTokenSource {
         ServiceTokenStore(applicationContext).loadConnection()?.let { connection ->
-            WearCredentials(baseUrl = connection.baseUrl, clientId = connection.token.clientId, clientSecret = connection.token.clientSecret)
+            connection.token?.let { WearCredentials(baseUrl = connection.baseUrl, clientId = it.clientId, clientSecret = it.clientSecret) }
         }
     }
 

@@ -121,10 +121,11 @@ private fun ResultCard(title: String, lines: List<String>, highlight: Color? = n
 @Composable
 private fun ServiceTokenLine(state: NetworkCheckUiState) {
     val token = state.token
-    val text = if (token != null) {
-        "Step 4 uses the service token from Settings (Client ID ${token.clientId})."
-    } else {
-        "No service token is set up, so step 4 (an authenticated request) is skipped."
+    val text = when {
+        token != null && state.paired -> "Step 4 uses this phone's device key and the service token from Settings (Client ID ${token.clientId})."
+        token != null -> "Step 4 uses the service token from Settings (Client ID ${token.clientId})."
+        state.paired -> "Step 4 uses this phone's device key (no service token is set up)."
+        else -> "No service token or device key is set up, so step 4 (an authenticated request) is skipped."
     }
     Text(text, style = MaterialTheme.typography.bodySmall)
 }

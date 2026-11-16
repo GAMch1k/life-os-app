@@ -70,7 +70,9 @@ data class OnboardingState(
 /**
  * P18-03: the server address and the Cloudflare Access service token, at the
  * first run and from Settings › Edit connection. Another server needs its own
- * token; the watch follows the saved server.
+ * token; the watch follows the saved server. Since P21-06 it also leads to
+ * pairing with an account ([Screen.Pair]); a server without Access needs no
+ * token at all.
  */
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application.graph
@@ -99,13 +101,23 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         return url to token
     }
 
+    /** The server to pair with: the typed one, or null (with a message) when it is not an https address. */
+    fun pairingServer(): String? {
+        val url = ServerUrl.normalize(state.value.server)
+        if (url == null) state.update { it.copy(message = "The server must be an https:// address, such as ${ServerUrl.DEFAULT}.", messageIsError = true) }
+        return url
+    }
+
     /** Tests the connection; [onPassed] runs after a passed test (the screen saves then). */
     fun test(onPassed: (() -> Unit)? = null) {
         val (url, token) = parsed() ?: return
         state.update { it.copy(testing = true, message = null) }
         viewModelScope.launch {
             try {
-                graph.client.testConnection(Connection(url, token))
+                // A paired phone tests with its key as well: once legacy access is off, the token alone gets 401.
+                val current = graph.tokens.current()
+                val key = current?.deviceKey?.takeIf { current.baseUrl == url }
+                graph.client.testConnection(Connection(url, token, key))
                 state.update {
                     it.copy(
                         testing = false,
@@ -131,6 +143,8 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         state.update { it.copy(saving = true) }
         viewModelScope.launch {
             val previous = graph.tokens.serverUrl()
+            // A device key belongs to its server: another server unpairs the phone (Life OS signs the key out).
+            if (previous != url) graph.leavePairing()
             graph.tokens.save(url, token)
             if (previous != url) graph.today.clear()
             // The watch, the push subscription and captures that failed on a bad token.
@@ -173,8 +187,9 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 Text("Connect to Life OS", style = MaterialTheme.typography.headlineMedium)
             }
             Text(
-                "The app reaches Life OS through Cloudflare Access with a service token made for this phone. " +
-                    "It is stored encrypted with the Android Keystore and sent only to your server.",
+                "The app signs in to Life OS with a key of its own, which it gets when you pair it with your account. " +
+                    "A Life OS behind Cloudflare Access (the official server is) also needs a service token made for this phone: " +
+                    "connect with it below first, then pair. Both are stored encrypted with the Android Keystore and sent only to your server.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
@@ -186,6 +201,17 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )
+            SectionCard("Pair with your account") {
+                Text(
+                    "With a QR code from Life OS (Settings → Devices), or by signing in on this phone. " +
+                        "Without Cloudflare Access in front, this is all the app needs.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(onClick = { viewModel.pairingServer()?.let { navigator.go(Screen.Pair(server = it)) } }, enabled = !state.testing && !state.saving) {
+                    Text("Pair this phone")
+                }
+            }
+            Text("Cloudflare Access service token", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = state.clientId,
                 onValueChange = { viewModel.edit(clientId = it) },

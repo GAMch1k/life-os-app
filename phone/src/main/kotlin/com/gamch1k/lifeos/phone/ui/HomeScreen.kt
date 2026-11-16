@@ -131,6 +131,7 @@ fun HomeScreen(navigator: Navigator, viewModel: HomeViewModel = viewModel()) {
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
                 item { UpdateBanner(state.update, onAct = { context.graph.updates.act() }) }
+                item { PairBanner(state.pairNotice, onPair = { navigator.go(Screen.Pair()) }, onDismiss = viewModel::dismissPairOffer) }
                 item { NotificationPrompt() }
                 item { FreshnessLine(state, onSetUp = { navigator.go(Screen.Settings) }) }
                 item {
@@ -143,17 +144,25 @@ fun HomeScreen(navigator: Navigator, viewModel: HomeViewModel = viewModel()) {
                 item { CaptureSummary(state, onOpen = { navigator.go(Screen.Queue) }) }
 
                 val today = state.today
+                if (state.notAllowed.isNotEmpty()) {
+                    // 403 module_not_allowed (P21-06): that part is left out; pairing again would not help.
+                    item { Hint("Your account can't use ${state.notAllowed.sorted().joinToString(" or ")} on this server.") }
+                }
                 if (today == null) {
                     if (!state.refreshing) item { Hint("Nothing loaded yet. Pull down to refresh.") }
                 } else {
-                    tasks(
-                        today.overdue,
-                        today.dueToday,
-                        onComplete = { viewModel.complete(it.id, it.title) },
-                        onOpen = { Dashboard.open(context, scope, "/tasks") },
-                    )
-                    events("Today", today.eventsToday) { Dashboard.open(context, scope, "/calendar?date=${it.date}") }
-                    events("Tomorrow", today.eventsTomorrow) { Dashboard.open(context, scope, "/calendar?date=${it.date}") }
+                    if ("Tasks" !in state.notAllowed) {
+                        tasks(
+                            today.overdue,
+                            today.dueToday,
+                            onComplete = { viewModel.complete(it.id, it.title) },
+                            onOpen = { Dashboard.open(context, scope, "/tasks") },
+                        )
+                    }
+                    if ("Calendar" !in state.notAllowed) {
+                        events("Today", today.eventsToday) { Dashboard.open(context, scope, "/calendar?date=${it.date}") }
+                        events("Tomorrow", today.eventsTomorrow) { Dashboard.open(context, scope, "/calendar?date=${it.date}") }
+                    }
                 }
                 item {
                     TextButton(onClick = { Dashboard.open(context, scope, "/") }, modifier = Modifier.padding(horizontal = 8.dp)) {
@@ -264,6 +273,34 @@ private fun CaptureSummary(state: HomeUiState, onOpen: () -> Unit) {
                 if (state.failed > 0) add("${state.failed} not sent")
             }
             if (queued.isNotEmpty()) Text(queued.joinToString(" · "), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/** P21-06: "no longer connected" (pair again), Life OS wants a sign-in, or the offer to pair (dismissible). */
+@Composable
+private fun PairBanner(notice: PairNotice?, onPair: () -> Unit, onDismiss: () -> Unit) {
+    val (text, action) = when (notice) {
+        null -> return
+        PairNotice.NO_LONGER_CONNECTED -> "This phone is no longer connected to Life OS: its key was signed out. Captures wait until you pair it again." to "Pair again"
+        PairNotice.PAIRING_REQUIRED -> "Life OS asks this phone to sign in: pair it with your account. Captures wait until then." to "Pair"
+        PairNotice.OFFER -> "Pair this phone with your Life OS account: it gets a key of its own, and keeps working once legacy access is turned off." to "Pair"
+    }
+    val problem = notice != PairNotice.OFFER
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (problem) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (!problem) TextButton(onClick = onDismiss) { Text("Not now") }
+                TextButton(onClick = onPair) { Text(action) }
+            }
         }
     }
 }
