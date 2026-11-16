@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import java.security.GeneralSecurityException
@@ -174,7 +175,8 @@ class TokenStoreTest {
         assertNull("a key belongs to its server", store.current()!!.deviceKey)
         assertNull(store.currentPairing())
 
-        store.savePairing("https://other.example.net", paired, "Pixel 9")
+        // Only because the person typed it (Edit connection): a link alone never moves a set-up phone.
+        store.savePairing("https://other.example.net", paired, "Pixel 9", typed = "https://other.example.net")
         val connection = store.current()!!
         assertEquals("https://other.example.net", connection.baseUrl)
         assertNull("a service token belongs to its server's Access", connection.token)
@@ -244,5 +246,67 @@ class TokenStoreTest {
         assertNull("too old", store.pending(nowMillis = 1_000 + TokenStore.PENDING_MAX_AGE_MILLIS + 1))
         store.clearPending()
         assertNull(store.pending(nowMillis = 2_000))
+    }
+
+    @Test
+    fun `a set-up phone never moves to a server the person did not type`() = runBlocking {
+        val store = TokenStore(stores.create(), FakeCipher())
+        store.save("https://lifeos.example.com", token)
+        store.savePairing("https://lifeos.example.com", paired, "Pixel 9")
+        try {
+            store.savePairing("https://evil.example.org", paired, "Pixel 9")
+            fail("moved to another server on a link's word")
+        } catch (_: IllegalStateException) {
+        }
+        val connection = store.current()!!
+        assertEquals("nothing changed", "https://lifeos.example.com", connection.baseUrl)
+        assertEquals(token.clientId, connection.token!!.clientId)
+        assertEquals(phoneKey, connection.deviceKey!!.value)
+        assertEquals("https://lifeos.example.com", store.configuredServer())
+    }
+
+    @Test
+    fun `a fresh install may pair with any https server`() = runBlocking {
+        val store = TokenStore(stores.create(), FakeCipher())
+        assertNull(store.configuredServer())
+        store.savePairing("https://own.example.org", paired, "Pixel 9")
+        assertEquals("https://own.example.org", store.current()!!.baseUrl)
+    }
+
+    @Test
+    fun `keys to sign out wait encrypted, outlive signing out, and are forgotten once done`() = runBlocking {
+        val dataStore = stores.create()
+        val store = TokenStore(dataStore, FakeCipher())
+        store.save("https://lifeos.example.com", token)
+        store.savePairing("https://lifeos.example.com", paired, "Pixel 9")
+        val id = store.queueRevoke(store.current()!!, nowMillis = 1_000)!!
+        store.queueRevoke(store.current()!!, nowMillis = 2_000)
+        assertEquals("the same key queued twice is one entry", 1, store.pendingRevokes().size)
+        val raw = dataStore.data.first().asMap().values.joinToString()
+        store.clear()
+
+        val pending = store.pendingRevokes().single()
+        assertEquals(phoneKey, pending.key.value)
+        assertEquals("the token that gets it through Access", token.clientSecret, pending.token!!.clientSecret)
+        assertEquals("https://lifeos.example.com", pending.server)
+        assertFalse(raw.contains(phoneKey.substring(7)))
+        assertFalse(raw.contains(token.clientSecret))
+        assertEquals(listOf(RevokeStatus("https://lifeos.example.com", 2_000, failed = false)), store.revokes.first())
+        assertFalse(pending.toString().contains(phoneKey))
+
+        store.revokeFailed(pending.id)
+        assertTrue(store.revokes.first().single().failed)
+        store.retryFailedRevokes(nowMillis = 5_000)
+        assertEquals(RevokeStatus("https://lifeos.example.com", 5_000, failed = false), store.revokes.first().single())
+        store.revokeFailed(pending.id)
+        store.dismissFailedRevokes()
+        assertTrue(store.pendingRevokes().isEmpty())
+
+        store.save("https://lifeos.example.com", token)
+        store.savePairing("https://lifeos.example.com", paired, "Pixel 9")
+        val again = store.queueRevoke(store.current()!!)!!
+        assertTrue(again != id)
+        store.revokeDone(again)
+        assertTrue(store.revokes.first().isEmpty())
     }
 }

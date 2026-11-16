@@ -14,7 +14,7 @@ class PairingLinkTest {
     fun `the QR code's link gives the server and the code`() {
         val link = PairingLink.parse("lifeos://pair?host=$host&code=K7QM-2XRP-9VDA-H4TC") as PairingLink.Code
         assertEquals("https://lifeos.example.com", link.server)
-        assertEquals("lifeos.example.com", link.host)
+        assertEquals("lifeos.example.com", link.authority)
         assertEquals("K7QM-2XRP-9VDA-H4TC", link.code)
         assertNull(link.state)
     }
@@ -35,7 +35,9 @@ class PairingLinkTest {
 
     @Test
     fun `a port, a trailing slash, an unencoded host and an upper-case scheme are fine`() {
-        assertEquals("https://lifeos.example.com:8443", (PairingLink.parse("lifeos://pair?host=https%3A%2F%2Flifeos.example.com%3A8443%2F&code=K7QM-2XRP-9VDA-H4TC") as PairingLink.Code).server)
+        val withPort = PairingLink.parse("lifeos://pair?host=https%3A%2F%2Flifeos.example.com%3A8443%2F&code=K7QM-2XRP-9VDA-H4TC") as PairingLink.Code
+        assertEquals("https://lifeos.example.com:8443", withPort.server)
+        assertEquals("the question shows the port too", "lifeos.example.com:8443", withPort.authority)
         assertEquals("https://lifeos.example.com", (PairingLink.parse("lifeos://pair?host=https://lifeos.example.com&code=K7QM-2XRP-9VDA-H4TC") as PairingLink.Code).server)
         assertEquals("https://lifeos.example.com", (PairingLink.parse("LIFEOS://PAIR?host=HTTPS%3A%2F%2Flifeos.example.com&code=K7QM-2XRP-9VDA-H4TC") as PairingLink.Code).server)
         assertTrue("unknown parameters are ignored", PairingLink.parse("lifeos://pair?host=$host&code=K7QM-2XRP-9VDA-H4TC&v=2") is PairingLink.Code)
@@ -58,8 +60,10 @@ class PairingLinkTest {
             "lifeos://pair?host=lifeos.example.com&code=K7QM-2XRP-9VDA-H4TC",
             "lifeos://pair?host=javascript%3Aalert(1)&code=K7QM-2XRP-9VDA-H4TC",
             "lifeos://pair?host=file%3A%2F%2F%2Fetc%2Fpasswd&code=K7QM-2XRP-9VDA-H4TC",
-            // A host with a user, a query or a fragment.
+            // A host with a user, a query, a fragment or a path: the public URL is an origin.
             "lifeos://pair?host=https%3A%2F%2Fevil%40lifeos.example.com&code=K7QM-2XRP-9VDA-H4TC",
+            "lifeos://pair?host=https%3A%2F%2Flifeos.example.com%2Fsomewhere&code=K7QM-2XRP-9VDA-H4TC",
+            "lifeos://pair?host=https%3A%2F%2Fshared.example.com%2Flifeos%2F&code=K7QM-2XRP-9VDA-H4TC",
             "lifeos://pair?host=https%3A%2F%2Flifeos.example.com%3Fx%3D1&code=K7QM-2XRP-9VDA-H4TC",
             // Missing, malformed or doubled parameters.
             "lifeos://pair?code=K7QM-2XRP-9VDA-H4TC",

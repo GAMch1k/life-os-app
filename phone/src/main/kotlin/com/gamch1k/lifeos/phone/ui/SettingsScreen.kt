@@ -200,6 +200,8 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            RevokeNotice()
+
             AccountSection(state, onPair = { navigator.go(Screen.Pair()) }, onUnpair = { confirmUnpair = true }, viewModel = viewModel)
 
             SectionCard("Connection") {

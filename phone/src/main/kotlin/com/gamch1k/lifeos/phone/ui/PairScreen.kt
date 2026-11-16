@@ -58,6 +58,7 @@ import com.gamch1k.lifeos.core.pairing.DeviceNames
 import com.gamch1k.lifeos.core.pairing.PairingChallenge
 import com.gamch1k.lifeos.core.pairing.PairingCode
 import com.gamch1k.lifeos.core.pairing.PairingLink
+import com.gamch1k.lifeos.core.pairing.PairingTarget
 import com.gamch1k.lifeos.core.pairing.QrCodes
 import com.gamch1k.lifeos.core.secrets.PendingPairing
 import com.gamch1k.lifeos.core.secrets.ServerUrl
@@ -71,16 +72,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.URI
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class PairUiState(
-    /** The server the code is redeemed at: the app's, or the one the person typed at the first run. */
+    /** The server the code is redeemed at: the app's, or the one the person typed (first run, Edit connection). */
     val server: String = "",
-    /** The server the app is set up for now, to say when a link leads elsewhere. */
-    val savedServer: String = "",
+    /** The server the app is set up for (a token or a key), or null on a fresh install. */
+    val configured: String? = null,
+    /** The server the person typed for this pairing, if they did. */
+    val typed: String? = null,
     val code: String = "",
     /** A link from a QR code or another app, waiting for "Pair with <host>?". */
     val confirm: PairingLink.Code? = null,
@@ -98,7 +100,9 @@ data class PairUiState(
  * from a photo the camera app takes, or opened by the camera app as a
  * `lifeos://pair` link), typed by hand, or from signing in in a Custom Tab
  * (with a PKCE-style verifier and a state). A link from outside is shown
- * ("Pair with lifeos.example.com?") and paired only after a tap.
+ * ("Pair with lifeos.example.com?") and paired only after a tap, and only
+ * with the phone's own server or one the person typed ([PairingTarget]); a
+ * fresh install may pair with any https server.
  */
 class PairViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application.graph
@@ -113,7 +117,8 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
         started = true
         viewModelScope.launch {
             val saved = graph.tokens.serverUrl()
-            state.update { it.copy(server = server?.let(ServerUrl::normalize) ?: saved, savedServer = saved) }
+            val typed = server?.let(ServerUrl::normalize)
+            state.update { it.copy(server = typed ?: saved, configured = graph.tokens.configuredServer(), typed = typed) }
             if (link != null) handleLink(link)
         }
     }
@@ -131,7 +136,15 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
             is PairingLink.Code -> if (link.state != null) {
                 viewModelScope.launch { fromBrowser(link) }
             } else {
-                state.update { it.copy(confirm = link, message = null) }
+                viewModelScope.launch {
+                    // A link or QR code can be anyone's: never a one-tap move to another server.
+                    val configured = graph.tokens.configuredServer()
+                    state.update { it.copy(configured = configured) }
+                    when (val verdict = PairingTarget.forLink(link.server, configured, state.value.typed)) {
+                        PairingTarget.Verdict.Ask -> state.update { it.copy(confirm = link, message = null) }
+                        is PairingTarget.Verdict.Refuse -> fail(verdict.message)
+                    }
+                }
             }
         }
     }
@@ -145,14 +158,20 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
         }
         graph.tokens.clearPending()
         state.update { it.copy(waitingForBrowser = false, server = pending.server) }
-        // Redeemed at the server the app opened, which is normally the link's host too.
-        redeem(pending.server, link.code, pending.verifier)
+        // Redeemed at the server the app opened (the phone's, or the one the person typed),
+        // which is normally the link's host too.
+        redeem(pending.server, link.code, pending.verifier, typed = pending.server)
     }
 
     fun confirmLink() {
         val link = state.value.confirm ?: return
-        state.update { it.copy(confirm = null, server = link.server) }
-        viewModelScope.launch { redeem(link.server, link.code, verifier = null) }
+        state.update { it.copy(confirm = null) }
+        viewModelScope.launch {
+            val verdict = PairingTarget.forLink(link.server, graph.tokens.configuredServer(), state.value.typed)
+            if (verdict is PairingTarget.Verdict.Refuse) return@launch fail(verdict.message)
+            state.update { it.copy(server = link.server) }
+            redeem(link.server, link.code, verifier = null, typed = state.value.typed)
+        }
     }
 
     fun cancelLink() = state.update { it.copy(confirm = null) }
@@ -162,7 +181,8 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
     fun pairWithCode() {
         val code = PairingCode.normalize(state.value.code)
             ?: return fail("A pairing code has 16 letters and digits, such as K7QM-2XRP-9VDA-H4TC.")
-        viewModelScope.launch { redeem(state.value.server, code, verifier = null) }
+        // The server on screen: the phone's, or the one the person typed.
+        viewModelScope.launch { redeem(state.value.server, code, verifier = null, typed = state.value.server) }
     }
 
     /** "Sign in on this phone": remembers the verifier and state, then [open]s the sign-in page in a Custom Tab. */
@@ -232,23 +252,23 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
      * Redeems [code] at [server] and keeps the key. Runs in the app's scope:
      * a code works once, so leaving the screen meanwhile must not lose the key.
      */
-    private suspend fun redeem(server: String, code: String, verifier: String?) {
+    private suspend fun redeem(server: String, code: String, verifier: String?, typed: String?) {
         // One at a time: a double tap must not spend the code twice.
         if (redeeming) return
         redeeming = true
         try {
-            redeemOnce(server, code, verifier)
+            redeemOnce(server, code, verifier, typed)
         } finally {
             redeeming = false
         }
     }
 
-    private suspend fun redeemOnce(server: String, code: String, verifier: String?) {
+    private suspend fun redeemOnce(server: String, code: String, verifier: String?, typed: String?) {
         state.update { it.copy(working = true, message = null) }
         val name = DeviceNames.clean(phoneName(), DeviceNames.PHONE_FALLBACK)
         val work = graph.scope.async {
             val paired = graph.client.pair(server, code, name, verifier)
-            graph.paired(server, paired, name)
+            graph.paired(server, paired, name, typed)
         }
         try {
             work.await()
@@ -267,6 +287,12 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
             state.update { it.copy(working = false, message = describe(error), messageIsError = true) }
         } catch (error: IllegalArgumentException) {
             state.update { it.copy(working = false, message = "Life OS answered with a key this app cannot use.", messageIsError = true) }
+        } catch (error: IllegalStateException) {
+            // The token store's own check: a set-up phone moves only to a server the person typed.
+            val configured = state.value.configured?.let(::hostOf) ?: "another server"
+            state.update {
+                it.copy(working = false, message = "This phone uses $configured. Change the server in Settings first, then pair.", messageIsError = true)
+            }
         }
     }
 
@@ -278,7 +304,8 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
-        fun hostOf(server: String): String = runCatching { URI(server).host }.getOrNull() ?: server
+        /** The server as the person reads it: host, and port if any. */
+        fun hostOf(server: String): String = PairingLink.authorityOf(server)
 
         fun describe(error: LifeOsException): String = when (error) {
             is LifeOsException.AccessRedirect, is LifeOsException.Unauthorized ->
@@ -355,14 +382,15 @@ fun PairScreen(navigator: Navigator, link: String?, server: String?, viewModel: 
     }
 
     state.confirm?.let { asked ->
-        val elsewhere = asked.server != state.savedServer
+        val configured = state.configured
+        val moving = configured != null && !PairingTarget.same(asked.server, configured)
         AlertDialog(
             onDismissRequest = viewModel::cancelLink,
-            title = { Text("Pair with ${asked.host}?") },
+            title = { Text("Pair with ${asked.authority}?") },
             text = {
                 Text(
                     "This phone gets a key for your account on ${asked.server}. Pair only with a code you just made yourself." +
-                        if (elsewhere) " The app is set up for ${PairViewModel.hostOf(state.savedServer)} now; pairing moves it to ${asked.host}." else "",
+                        if (moving) " This moves the phone from ${PairViewModel.hostOf(configured!!)} to ${asked.authority}, as you typed." else "",
                 )
             },
             confirmButton = { TextButton(onClick = viewModel::confirmLink) { Text("Pair") } },

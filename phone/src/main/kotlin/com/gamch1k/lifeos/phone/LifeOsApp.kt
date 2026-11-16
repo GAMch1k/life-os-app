@@ -5,6 +5,7 @@ import android.content.Context
 import com.gamch1k.lifeos.core.wearlink.WearLinkHost
 import com.gamch1k.lifeos.core.wearlink.WearRelay
 import com.gamch1k.lifeos.core.wearlink.WearTokenSource
+import com.gamch1k.lifeos.phone.pairing.RevokeWorker
 import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.today.TodayRefreshWorker
 import com.gamch1k.lifeos.phone.update.UpdateWorker
@@ -36,6 +37,8 @@ class LifeOsApp : Application(), WearLinkHost {
             graph.queue.resumeAll()
             graph.captures.pruneSent(Instant.now(), Duration.ofDays(7))
             graph.queue.pruneOrphans()
+            // Keys Life OS has not confirmed signing out yet (P21-06): tried again when online.
+            if (graph.tokens.pendingRevokes().any { !it.failed }) RevokeWorker.enqueue(this@LifeOsApp)
         }
         // Snoozed notifications: late ones (after a force stop) come back, the alarm is set again.
         graph.scope.launch { graph.snoozes.wake() }

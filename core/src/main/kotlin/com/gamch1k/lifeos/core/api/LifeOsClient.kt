@@ -350,9 +350,19 @@ class LifeOsClient(
      */
     suspend fun signOutDevice(key: DeviceKey? = null) {
         val target = connection() ?: throw LifeOsException.NotSignedIn()
-        val signingOut = key ?: target.deviceKey ?: return
+        signOutKey(Connection(target.baseUrl, target.token, key ?: target.deviceKey ?: return))
+    }
+
+    /**
+     * `POST /api/auth/devices/sign-out` with [target]'s key, at its server,
+     * through Access with its service token: also after the phone forgot
+     * them (a queued revocation). A key that no longer works counts as
+     * signed out already.
+     */
+    suspend fun signOutKey(target: Connection) {
+        if (target.deviceKey == null) return
         try {
-            exchange("POST", SIGN_OUT_PATH, emptyList(), null, idempotent = true, candidate = Connection(target.baseUrl, target.token, signingOut))
+            exchange("POST", SIGN_OUT_PATH, emptyList(), null, idempotent = true, candidate = target)
         } catch (_: LifeOsException.SignInRequired) {
             // Revoked already.
         }

@@ -14,16 +14,21 @@ import com.gamch1k.lifeos.core.api.ChildKey
 import com.gamch1k.lifeos.core.api.Connection
 import com.gamch1k.lifeos.core.api.DeviceIdentity
 import com.gamch1k.lifeos.core.api.DeviceKeyListener
+import com.gamch1k.lifeos.core.api.LifeOsJson
 import com.gamch1k.lifeos.core.api.PairedDevice
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
+import com.gamch1k.lifeos.core.pairing.PairingTarget
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import java.net.URI
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.time.Instant
 import java.util.Base64
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -164,6 +169,22 @@ class StoredWatchKey(val key: DeviceKey, val keyId: String, val refused: Boolean
     override fun toString() = "StoredWatchKey($keyId, refused=$refused)"
 }
 
+/**
+ * A device key the phone forgot but Life OS has not confirmed signing out
+ * yet (no network, a timeout): unpairing, signing out, pairing again or
+ * changing the server queued it, and the app tries again when online. The
+ * key, and the service token that gets the request through Cloudflare
+ * Access, are kept encrypted for that only.
+ */
+class PendingRevoke(val id: String, val server: String, val key: DeviceKey, val token: ServiceToken?, val sinceMillis: Long, val failed: Boolean) {
+    val connection: Connection get() = Connection(server, token, key)
+
+    override fun toString() = "PendingRevoke($id, $server, failed=$failed)"
+}
+
+/** What the app tells the person about a [PendingRevoke] (never the key). */
+data class RevokeStatus(val server: String, val sinceMillis: Long, val failed: Boolean)
+
 /** A Custom Tab pairing on its way (the browser has the page; the link comes back with [state]). */
 class PendingPairing(val server: String, val state: String, val verifier: String, val startedAtMillis: Long) {
     override fun toString() = "PendingPairing($server, …)"
@@ -197,6 +218,11 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     /** Whether the owner dismissed Home's "Pair this phone" card. */
     val pairPromptDismissed: Flow<Boolean> = store.data.map { it[PAIR_PROMPT_DISMISSED] == true }
 
+    /** The keys Life OS has not confirmed signing out yet ([PendingRevoke]), for the notice. */
+    val revokes: Flow<List<RevokeStatus>> = store.data.map { preferences ->
+        storedRevokes(preferences).map { RevokeStatus(it.server, it.since, it.failed) }
+    }
+
     suspend fun current(): Connection? = connection.first()
 
     suspend fun currentPairing(): Pairing? = pairing.first()
@@ -224,13 +250,18 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     /**
      * Keeps the device key Life OS issued at [server] for this phone, named
      * [deviceName]. A previous pairing and its watch key go; so does the
-     * service token when [server] is another server.
+     * service token when [server] is another server. A phone that is set up
+     * moves to another server only when the person typed it ([typed]), never
+     * because a link said so ([PairingTarget]): otherwise this throws
+     * [IllegalStateException] and changes nothing.
      */
-    suspend fun savePairing(server: String, paired: PairedDevice, deviceName: String, now: Instant = Instant.now()) {
+    suspend fun savePairing(server: String, paired: PairedDevice, deviceName: String, typed: String? = null, now: Instant = Instant.now()) {
         val url = requireNotNull(ServerUrl.normalize(server)) { "not an https URL" }
         val key = requireNotNull(DeviceKey.parse(paired.key)) { "not a device key" }
         val sealed = cipher.encrypt(key.value)
         store.edit {
+            val configured = (it[SERVER_URL] ?: ServerUrl.DEFAULT).takeIf { _ -> it[CLIENT_ID] != null || it[DEVICE_KEY] != null }
+            check(PairingTarget.mayMoveTo(url, configured, typed)) { "this phone is set up for another server" }
             if ((it[SERVER_URL] ?: ServerUrl.DEFAULT) != url) {
                 it.remove(CLIENT_ID)
                 it.remove(CLIENT_SECRET)
@@ -327,6 +358,94 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     suspend fun watchKeyAccepted(key: DeviceKey) {
         if (store.data.first()[WATCH_REFUSED] != true || watchKey()?.key != key) return
         store.edit { it.remove(WATCH_REFUSED) }
+    }
+
+    /** The server the phone is set up for (a service token or a key), or null on a fresh install. */
+    suspend fun configuredServer(): String? = store.data.first().let { preferences ->
+        (preferences[SERVER_URL] ?: ServerUrl.DEFAULT).takeIf { preferences[CLIENT_ID] != null || preferences[DEVICE_KEY] != null }
+    }
+
+    // ---- Keys Life OS has not confirmed signing out yet ([PendingRevoke])
+
+    /** Queues [connection]'s key (with its server and service token) to be signed out when online. */
+    suspend fun queueRevoke(connection: Connection, failed: Boolean = false, nowMillis: Long = System.currentTimeMillis()): String? {
+        val key = connection.deviceKey ?: return null
+        val entry = StoredRevoke(
+            id = UUID.randomUUID().toString(),
+            server = connection.baseUrl,
+            key = cipher.encrypt(key.value),
+            clientId = connection.token?.let { cipher.encrypt(it.clientId) },
+            clientSecret = connection.token?.let { cipher.encrypt(it.clientSecret) },
+            since = nowMillis,
+            failed = failed,
+        )
+        store.edit { preferences ->
+            // The same key queued twice (a second tap) stays one entry.
+            val kept = storedRevokes(preferences).filterNot { openRevoke(it)?.key == key }
+            writeRevokes(preferences, kept + entry)
+        }
+        return entry.id
+    }
+
+    /** The queued keys, opened; one that can no longer be opened (the Keystore key is gone) is left out. */
+    suspend fun pendingRevokes(): List<PendingRevoke> = storedRevokes(store.data.first()).mapNotNull { openRevoke(it) }
+
+    /** Life OS confirmed (or the key was gone already): forget it. */
+    suspend fun revokeDone(id: String) {
+        store.edit { preferences -> writeRevokes(preferences, storedRevokes(preferences).filterNot { it.id == id }) }
+    }
+
+    /** No more tries: the notice tells the person to sign the phone out on the web. */
+    suspend fun revokeFailed(id: String) {
+        store.edit { preferences ->
+            writeRevokes(preferences, storedRevokes(preferences).map { if (it.id == id) it.copy(failed = true) else it })
+        }
+    }
+
+    /** The notice's Try again: the given-up ones are tried again, as new. */
+    suspend fun retryFailedRevokes(nowMillis: Long = System.currentTimeMillis()) {
+        store.edit { preferences ->
+            writeRevokes(preferences, storedRevokes(preferences).map { if (it.failed) it.copy(failed = false, since = nowMillis) else it })
+        }
+    }
+
+    /** The notice's Dismiss: the person signs the phone out on the web. */
+    suspend fun dismissFailedRevokes() {
+        store.edit { preferences -> writeRevokes(preferences, storedRevokes(preferences).filterNot { it.failed }) }
+    }
+
+    @Serializable
+    private data class StoredRevoke(
+        val id: String,
+        val server: String,
+        /** Sealed, as are the token's two values. */
+        val key: String,
+        val clientId: String? = null,
+        val clientSecret: String? = null,
+        val since: Long,
+        val failed: Boolean = false,
+    ) {
+        override fun toString() = "StoredRevoke($id, $server)"
+    }
+
+    private fun storedRevokes(preferences: Preferences): List<StoredRevoke> {
+        val json = preferences[PENDING_REVOKES] ?: return emptyList()
+        return runCatching { LifeOsJson.decodeFromString(ListSerializer(StoredRevoke.serializer()), json) }.getOrDefault(emptyList())
+    }
+
+    private fun writeRevokes(preferences: MutablePreferences, revokes: List<StoredRevoke>) {
+        if (revokes.isEmpty()) preferences.remove(PENDING_REVOKES)
+        else preferences[PENDING_REVOKES] = LifeOsJson.encodeToString(ListSerializer(StoredRevoke.serializer()), revokes)
+    }
+
+    private fun openRevoke(stored: StoredRevoke): PendingRevoke? = try {
+        val key = DeviceKey.parse(cipher.decrypt(stored.key)) ?: return null
+        val token = if (stored.clientId != null && stored.clientSecret != null) ServiceToken(cipher.decrypt(stored.clientId), cipher.decrypt(stored.clientSecret)) else null
+        PendingRevoke(stored.id, stored.server, key, token, stored.since, stored.failed)
+    } catch (_: GeneralSecurityException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
     }
 
     // ---- The Custom Tab flow's verifier and state, while the browser has the page
@@ -492,6 +611,9 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         private val PENDING_VERIFIER = stringPreferencesKey("pair-pending-verifier")
         private val PENDING_AT = longPreferencesKey("pair-pending-at")
         private val PAIR_PROMPT_DISMISSED = booleanPreferencesKey("pair-prompt-dismissed")
+
+        // Keys to sign out when online: kept across sign-out (clear() leaves them).
+        private val PENDING_REVOKES = stringPreferencesKey("device-keys-to-revoke")
 
         private const val LEGACY_PREFERENCES = "service-token"
         private const val LEGACY_ID = "client-id"

@@ -18,15 +18,16 @@ import java.util.Locale
  * app passed); the second when the person tapped Cancel on that page.
  *
  * [parse] accepts exactly that: the `lifeos` scheme, the `pair` host, no
- * path, port, user or fragment, an `https://` host, a well-formed code and
- * state, each parameter at most once. Anything else is null: a pairing link
- * can come from anywhere a link can.
+ * path, port, user or fragment, an `https://` host (an origin: a host and
+ * perhaps a port, no path), a well-formed code and state, each parameter at
+ * most once. Anything else is null: a pairing link can come from anywhere a
+ * link can. Where a code may lead is [PairingTarget]'s to judge.
  */
 sealed interface PairingLink {
     /** A code to redeem at [server] (an https URL, no trailing slash). [state] only in the Custom Tab flow. */
     class Code(val server: String, val code: String, val state: String?) : PairingLink {
-        /** The host to show the person ("Pair with lifeos.example.com?"). */
-        val host: String get() = URI(server).host
+        /** The server to show the person, with its port if any ("Pair with lifeos.example.com:8443?"). */
+        val authority: String get() = authorityOf(server)
 
         override fun equals(other: Any?) = other is Code && other.server == server && other.code == code && other.state == state
         override fun hashCode() = (server.hashCode() * 31 + code.hashCode()) * 31 + state.hashCode()
@@ -67,11 +68,20 @@ sealed interface PairingLink {
             return Code(server, code, state)
         }
 
-        /** `https://lifeos.example.com` from the link's `host`: https only, written out in full. */
+        /**
+         * `https://lifeos.example.com` from the link's `host`: https only,
+         * written out in full, an origin (a trailing slash is fine, a path is
+         * not: the server's public URL is an origin).
+         */
         fun server(host: String): String? {
             if (!host.startsWith("https://", ignoreCase = true)) return null
-            return ServerUrl.normalize("https://" + host.substring("https://".length))
+            val server = ServerUrl.normalize("https://" + host.substring("https://".length)) ?: return null
+            val path = runCatching { URI(server).rawPath }.getOrNull() ?: return null
+            return server.takeIf { path.isEmpty() }
         }
+
+        /** `lifeos.example.com`, or `lifeos.example.com:8443` with a port: what the person reads. */
+        fun authorityOf(server: String): String = runCatching { URI(server).rawAuthority }.getOrNull() ?: server
 
         /** The decoded parameters, or null when one is malformed or comes twice. Unknown ones are ignored. */
         private fun query(raw: String): Map<String, String>? {

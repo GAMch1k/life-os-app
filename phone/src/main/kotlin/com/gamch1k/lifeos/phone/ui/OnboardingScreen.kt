@@ -202,6 +202,8 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 Spacer(Modifier.size(24.dp))
                 Text("Connect to Life OS", style = MaterialTheme.typography.headlineMedium)
             }
+            // After signing out: a key Life OS has not confirmed signing out yet.
+            RevokeNotice()
             Text(
                 "The app signs in to Life OS with a key of its own, which it gets when you pair it with your account. " +
                     "A Life OS behind Cloudflare Access (the official server is) also needs a service token made for this phone: " +

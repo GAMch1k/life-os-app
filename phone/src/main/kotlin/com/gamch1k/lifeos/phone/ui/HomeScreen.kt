@@ -132,6 +132,7 @@ fun HomeScreen(navigator: Navigator, viewModel: HomeViewModel = viewModel()) {
             ) {
                 item { UpdateBanner(state.update, onAct = { context.graph.updates.act() }) }
                 item { PairBanner(state.pairNotice, onPair = { navigator.go(Screen.Pair()) }, onDismiss = viewModel::dismissPairOffer) }
+                item { RevokeNotice(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                 item { NotificationPrompt() }
                 item { FreshnessLine(state, onSetUp = { navigator.go(Screen.Settings) }) }
                 item {

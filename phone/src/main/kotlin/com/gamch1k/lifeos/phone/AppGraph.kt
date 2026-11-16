@@ -22,6 +22,8 @@ import com.gamch1k.lifeos.core.capture.CaptureSender
 import com.gamch1k.lifeos.core.capture.CaptureStatusChecker
 import com.gamch1k.lifeos.core.capture.CaptureStore
 import com.gamch1k.lifeos.core.capture.asCaptureApi
+import com.gamch1k.lifeos.core.api.Connection
+import com.gamch1k.lifeos.core.pairing.KeyRevoker
 import com.gamch1k.lifeos.core.pairing.WatchKeys
 import com.gamch1k.lifeos.core.push.SnoozeBook
 import com.gamch1k.lifeos.core.push.Snoozer
@@ -33,6 +35,7 @@ import com.gamch1k.lifeos.core.wearlink.WearLink
 import com.gamch1k.lifeos.core.wearlink.WearLinkPhone
 import com.gamch1k.lifeos.core.wearlink.WearNodes
 import com.gamch1k.lifeos.phone.capture.CaptureQueue
+import com.gamch1k.lifeos.phone.pairing.RevokeWorker
 import com.gamch1k.lifeos.phone.push.AndroidSnoozeAlarm
 import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.push.PushManager
@@ -55,7 +58,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 /** The app's singletons, built once in [LifeOsApp]. */
 class AppGraph(private val app: Application) {
@@ -91,6 +93,9 @@ class AppGraph(private val app: Application) {
 
     /** Today for Home, the widget and the watch; changes reach the watch and the widgets. */
     val today = TodayRepository(client, homeCache, onChanged = ::todayChanged)
+
+    /** Signs keys the phone lets go out of Life OS, now or, queued, when online (P21-06). */
+    val revoker = KeyRevoker(tokens, client)
 
     /** The watch's own device key, made by this phone once it is paired (P21-06). */
     val watchKeys = WatchKeys(tokens, client, watchName = ::watchName)
@@ -177,10 +182,11 @@ class AppGraph(private val app: Application) {
      * own), captures refused for a sign-in go again, and push registers again
      * so that its subscription belongs to the key.
      */
-    suspend fun paired(server: String, paired: PairedDevice, deviceName: String) {
+    suspend fun paired(server: String, paired: PairedDevice, deviceName: String, typed: String?) {
         val before = tokens.current()
-        before?.deviceKey?.let { old -> revokeQuietly { client.signOutDevice(old) } }
-        tokens.savePairing(server, paired, deviceName)
+        // Refuses (IllegalStateException) to move a set-up phone to a server the person did not type.
+        tokens.savePairing(server, paired, deviceName, typed = typed)
+        before?.takeIf { it.deviceKey != null }?.let { revoke(it) }
         if (before?.baseUrl != tokens.serverUrl()) today.clear()
         tokenSaved()
     }
@@ -199,22 +205,22 @@ class AppGraph(private val app: Application) {
         push.sync()
     }
 
-    /** Life OS signs the phone's key out (best effort), the phone forgets it and the watch's; the watch hears of it. */
+    /** Life OS signs the phone's key out (now, or queued until online), the phone forgets it and the watch's; the watch hears of it. */
     suspend fun leavePairing() {
-        val key = tokens.current()?.deviceKey ?: return
-        revokeQuietly { client.signOutDevice(key) }
+        val connection = tokens.current()?.takeIf { it.deviceKey != null } ?: return
+        revoke(connection)
         tokens.clearPairing()
         credentialsChanged()
     }
 
-    /** Best effort: the phone forgets the key either way, and Settings → Devices can still sign it out. */
-    private suspend fun revokeQuietly(call: suspend () -> Unit) {
-        try {
-            withTimeoutOrNull(10_000) { call() }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-        }
+    /**
+     * Signs [connection]'s key out of Life OS. When Life OS does not confirm
+     * (offline, a timeout), the key is queued and RevokeWorker tries again
+     * when online; Settings, Home and the first screen say so until it goes
+     * through, or ask the person to sign the phone out on the web.
+     */
+    private suspend fun revoke(connection: Connection) {
+        if (!revoker.revoke(connection)) RevokeWorker.enqueue(app)
     }
 
     /** The watch with the Life OS app, by the name Wear OS gives it (such as "Galaxy Watch8 (A1B2)"). */
@@ -237,7 +243,7 @@ class AppGraph(private val app: Application) {
      */
     suspend fun signOut() {
         push.unregister()
-        tokens.current()?.deviceKey?.let { key -> revokeQuietly { client.signOutDevice(key) } }
+        tokens.current()?.takeIf { it.deviceKey != null }?.let { revoke(it) }
         tokens.clear()
         today.clear()
         queue.clear()
