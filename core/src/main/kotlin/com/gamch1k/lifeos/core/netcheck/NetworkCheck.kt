@@ -1,7 +1,9 @@
 package com.gamch1k.lifeos.core.netcheck
 
 import android.content.Context
+import com.gamch1k.lifeos.core.api.Connection
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
+import com.gamch1k.lifeos.core.secrets.DeviceKey
 import com.gamch1k.lifeos.core.secrets.ServiceToken
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -21,7 +23,7 @@ import java.util.concurrent.Executors
 class NetworkCheck(context: Context) {
     private val context = context.applicationContext
 
-    suspend fun run(server: String, appVersion: String, quicAllowed: Boolean, token: ServiceToken?): NetworkCheckResult =
+    suspend fun run(server: String, appVersion: String, quicAllowed: Boolean, token: ServiceToken?, deviceKey: DeviceKey? = null): NetworkCheckResult =
         withContext(Dispatchers.IO) {
             val traceUrl = LifeOsEndpoints.traceUrl(server)
             val executor = Executors.newSingleThreadExecutor()
@@ -29,22 +31,19 @@ class NetworkCheck(context: Context) {
                 val startedAt = ZonedDateTime.now()
                 val embeddedVersion = CronetEngines.provider(context, CronetEngines.Provider.EMBEDDED)?.version
 
-                // 1 and 4: embedded Cronet, then the service-token request on the same engine.
+                // 1 and 4: embedded Cronet, then the authenticated request on the same engine,
+                // with the app's own headers (the device key once paired, the service token if any).
                 var authenticated: HttpProbeResult? = null
                 val cronetLabel = "Cronet ${embeddedVersion ?: "?"}, embedded, built-in DNS"
                 val cronet = withEngine(CronetEngines.Provider.EMBEDDED, quicAllowed, cronetLabel, traceUrl) { engine ->
                     val trace = CronetProbe.get(engine, executor, cronetLabel, traceUrl, parseTrace = true)
-                    if (token != null) {
+                    if (token != null || deviceKey != null) {
                         authenticated = CronetProbe.get(
                             engine,
                             executor,
                             "Service token request",
                             LifeOsEndpoints.tasksProbeUrl(server),
-                            headers = mapOf(
-                                "CF-Access-Client-Id" to token.clientId,
-                                "CF-Access-Client-Secret" to token.clientSecret,
-                                "X-Life-OS-Actor" to "user",
-                            ),
+                            headers = Connection(server, token, deviceKey).authHeaders(),
                             parseTrace = false,
                         )
                     }
@@ -81,6 +80,8 @@ class NetworkCheck(context: Context) {
                     platform = platform,
                     dns = dns,
                     authenticated = authenticated,
+                    authenticatedWithKey = authenticated != null && deviceKey != null,
+                    authenticatedWithToken = authenticated != null && token != null,
                 )
             } finally {
                 executor.shutdown()

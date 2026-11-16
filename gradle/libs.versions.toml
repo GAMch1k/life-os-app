@@ -42,6 +42,10 @@ glance = "1.2.0"
 libadb = "3.1.1"
 conscrypt = "2.9.0"
 bouncycastle = "1.86"
+# Pairing (P21-06): reading the pairing QR code from a photo the camera app
+# took, so the app needs no camera permission. ZXing core, Apache-2.0, pure
+# Java; nothing of ML Kit or CameraX.
+zxing = "3.5.4"
 
 # Build tools only, never in an APK (SEC-APP). AGP 9.5.1, the newest 9.x,
 # brings these libraries in versions with security advisories, on its own
@@ -104,6 +108,7 @@ libadb-android = { module = "com.github.MuntashirAkon:libadb-android", version.r
 conscrypt-android = { module = "org.conscrypt:conscrypt-android", version.ref = "conscrypt" }
 bouncycastle-bcpkix = { module = "org.bouncycastle:bcpkix-jdk15to18", version.ref = "bouncycastle" }
 bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk15to18", version.ref = "bouncycastle" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 # Embedded Cronet: the whole Chromium network stack inside the APK
 # (cronet-embedded is now an empty alias of cronet-bundled).

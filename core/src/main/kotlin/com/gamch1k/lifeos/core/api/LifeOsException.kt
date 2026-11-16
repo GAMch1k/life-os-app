@@ -11,10 +11,43 @@ sealed class LifeOsException(message: String, cause: Throwable? = null) : Except
     /** The service token is missing, wrong, or not let in: only the owner can fix it. */
     open val authProblem: Boolean get() = false
 
-    /** No service token is set up on this phone. */
-    class NotSignedIn : LifeOsException("This phone is not connected to Life OS yet: set up the service token.") {
+    /** Neither a device key nor a service token is set up on this phone. */
+    class NotSignedIn : LifeOsException("This phone is not connected to Life OS yet: pair it with your account, or set up the service token.") {
         override val retryable get() = false
         override val authProblem get() = true
+    }
+
+    /**
+     * Life OS itself (not Cloudflare Access) answered 401
+     * `{"error":{"code":"unauthenticated"}}`. With [keySent] the phone's
+     * device key no longer works: revoked in Settings → Devices, signed out
+     * everywhere, or the account was disabled. Without a key, Life OS needs
+     * one: legacy access is off. Either way the phone must be paired (again).
+     */
+    class SignInRequired(val keySent: Boolean) : LifeOsException(
+        if (keySent) "This phone is no longer connected to Life OS (its key was signed out). Pair it again: Settings › Account."
+        else "Life OS asks this phone to sign in: pair it with your account (Settings › Account › Pair this phone).",
+    ) {
+        override val retryable get() = false
+        override val authProblem get() = true
+    }
+
+    /**
+     * 403 `module_not_allowed`: the account may not use [module] on this
+     * server (an admin turned it off for the person). Not a sign-in
+     * problem: pairing again would not help.
+     */
+    class ModuleNotAllowed(val module: String?) : LifeOsException(
+        "Your account can't use ${module ?: "this part of Life OS"} on this server.",
+    ) {
+        override val retryable get() = false
+    }
+
+    /** `POST /api/auth/devices/pair` answered 404: a server from before device pairing (P21-06). */
+    class PairingUnsupported : LifeOsException(
+        "This Life OS server is older than device pairing. The app keeps using its Cloudflare Access service token; update the server to pair.",
+    ) {
+        override val retryable get() = false
     }
 
     /** No HTTP answer: no network, the name did not resolve, or the connection was reset. */
@@ -52,8 +85,12 @@ sealed class LifeOsException(message: String, cause: Throwable? = null) : Except
         override val authProblem get() = true
     }
 
-    /** A 4xx from Life OS, with its error envelope's code and message when it sent one. */
-    class Api(val status: Int, val code: String, val detail: String) : LifeOsException("Life OS refused the request ($status $code): $detail") {
+    /**
+     * A 4xx from Life OS, with its error envelope's code and message when it
+     * sent one, and for a 429 how long to wait (`Retry-After`, in seconds).
+     */
+    class Api(val status: Int, val code: String, val detail: String, val retryAfterSeconds: Long? = null) :
+        LifeOsException("Life OS refused the request ($status $code): $detail") {
         override val retryable get() = status == 408 || status == 429
     }
 

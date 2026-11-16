@@ -140,7 +140,71 @@ data class PushSubscriptionRequest(val endpoint: String, val keys: PushKeys)
 data class PushKeys(val p256dh: String, val auth: String)
 
 @Serializable
-data class PushSubscription(val id: String, val deviceLabel: String? = null, val endpoint: String, val pushService: String? = null)
+data class PushSubscription(
+    val id: String,
+    val deviceLabel: String? = null,
+    val endpoint: String,
+    val pushService: String? = null,
+    /** The device key the subscription belongs to (P21-06); null for one made without a key. */
+    val deviceKeyId: String? = null,
+)
+
+// ---- Devices (/api/auth/devices, docs/api/devices.md in life-os, P21-06)
+
+@Serializable
+data class PairRequest(
+    val code: String,
+    val name: String,
+    /** Only for a code made in the Custom Tab flow, whose challenge is this verifier's SHA-256. */
+    val verifier: String? = null,
+) {
+    override fun toString() = "PairRequest(…, $name)"
+}
+
+/** The account a key belongs to. */
+@Serializable
+data class AccountUser(val id: String = "", val username: String = "", val name: String? = null)
+
+/** `POST /api/auth/devices/pair`: the phone's device key, shown this one time. Its toString never shows the key. */
+@Serializable
+class PairedDevice(
+    val key: String,
+    val keyId: String,
+    val name: String = "",
+    val kind: String = "phone",
+    val createdAt: String? = null,
+    val user: AccountUser? = null,
+    val publicUrl: String? = null,
+) {
+    override fun toString() = "PairedDevice($keyId, $kind)"
+}
+
+@Serializable
+data class ChildKeyRequest(val name: String)
+
+/** `POST /api/auth/devices/child`: the watch's key, made by its phone. Its toString never shows the key. */
+@Serializable
+class ChildKey(
+    val key: String,
+    val keyId: String,
+    val name: String = "",
+    val kind: String = "watch",
+    val parentKeyId: String? = null,
+    val createdAt: String? = null,
+) {
+    override fun toString() = "ChildKey($keyId, $kind)"
+}
+
+/** `GET /api/auth/devices/me`: who a key is. */
+@Serializable
+data class DeviceIdentity(
+    val keyId: String,
+    val name: String = "",
+    val kind: String = "",
+    val parentKeyId: String? = null,
+    val createdAt: String? = null,
+    val user: AccountUser? = null,
+)
 
 // ---- Android releases (/android/updates, docs/operations/android-releases.md)
 

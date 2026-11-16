@@ -172,6 +172,35 @@ class CaptureSenderTest {
     }
 
     @Test
+    fun `a voice note refused for a signed-out key stays queued as failed, and goes again with the same key after pairing`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.SignInRequired(keySent = true)
+        assertTrue(sender.send("c-voice") is SendOutcome.Failed)
+        val failed = store.get("c-voice")!!
+        assertEquals(CaptureStatus.FAILED, failed.status)
+        assertTrue("kept for after pairing", failed.authProblem)
+        assertTrue(failed.error!!.contains("no longer connected"))
+
+        // Pairing again (AppGraph.tokenSaved) resends what failed on the old key.
+        assertEquals(listOf("c-voice"), sender.resetAuthFailures())
+        assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        assertEquals("the same Idempotency-Key on both tries", listOf("c-voice", "c-voice"), api.audioAttempts.map { it.third })
+    }
+
+    @Test
+    fun `a module the account may not use fails with a clear message, not as a sign-in problem`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.ModuleNotAllowed("Voice notes")
+        assertTrue(sender.send("c-voice") is SendOutcome.Failed)
+        val failed = store.get("c-voice")!!
+        assertFalse("pairing again would not help", failed.authProblem)
+        assertEquals("Your account can't use Voice notes on this server.", failed.error)
+        assertTrue(sender.resetAuthFailures().isEmpty())
+    }
+
+    @Test
     fun `a 4xx refusal is not retried and keeps the server's reason`() = runBlocking {
         setUp()
         store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))

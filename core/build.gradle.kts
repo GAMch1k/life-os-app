@@ -46,6 +46,10 @@ dependencies {
     api(libs.play.services.wearable)
     api(libs.kotlinx.coroutines.play.services)
 
+    // Pairing (P21-06): the pairing QR code read from a photo (core/…/pairing/QrCodes.kt).
+    // Only the phone uses it; R8 leaves it out of the wear APK.
+    implementation(libs.zxing.core)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }

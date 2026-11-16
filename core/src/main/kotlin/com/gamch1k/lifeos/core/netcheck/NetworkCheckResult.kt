@@ -4,7 +4,7 @@ import java.time.ZonedDateTime
 
 /**
  * Everything one run of the network check found. It never holds a secret:
- * the service token only shows up as whether it was set.
+ * the service token and the device key only show up as whether they were set.
  */
 data class NetworkCheckResult(
     val startedAt: ZonedDateTime,
@@ -19,8 +19,12 @@ data class NetworkCheckResult(
     val platform: HttpProbeResult,
     /** The HTTPS DNS record as the system resolver sees it. */
     val dns: DnsProbeResult,
-    /** The service-token request through embedded Cronet; null when no token is stored. */
+    /** The authenticated request through embedded Cronet; null when neither a token nor a device key is stored. */
     val authenticated: HttpProbeResult?,
+    /** The authenticated request carried the phone's device key (P21-06), besides any service token. */
+    val authenticatedWithKey: Boolean = false,
+    /** It carried the Cloudflare Access service token. */
+    val authenticatedWithToken: Boolean = authenticated != null,
 )
 
 /** What one HTTP request through one network stack produced. */

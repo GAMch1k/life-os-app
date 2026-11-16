@@ -5,18 +5,24 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.gamch1k.lifeos.core.api.ChildKey
 import com.gamch1k.lifeos.core.api.Connection
+import com.gamch1k.lifeos.core.api.DeviceIdentity
+import com.gamch1k.lifeos.core.api.DeviceKeyListener
+import com.gamch1k.lifeos.core.api.PairedDevice
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
-import com.gamch1k.lifeos.core.wearlink.WearCredentials
-import com.gamch1k.lifeos.core.wearlink.WearTokenSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.net.URI
 import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.time.Instant
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -126,49 +132,241 @@ class KeystoreCipher(private val alias: String = "lifeos-service-token") : Secre
     }
 }
 
+/** The account this phone is paired with (P21-06), as Settings shows it. */
+data class Pairing(
+    /** The server that issued the key: the app's server. */
+    val server: String,
+    val keyId: String,
+    /** What Settings → Devices calls this phone. */
+    val deviceName: String,
+    val username: String?,
+    val displayName: String?,
+    val pairedAt: String?,
+    /** Life OS answered 401 to the key: the phone must be paired again. Cleared by the next success. */
+    val refused: Boolean,
+    /** The watch's own key, once the phone made one. */
+    val watch: WatchKeyInfo?,
+) {
+    /** "Anna (anna)", "anna", or null before the account is known. */
+    val account: String?
+        get() = when {
+            username.isNullOrBlank() -> displayName?.takeIf { it.isNotBlank() }
+            displayName.isNullOrBlank() || displayName == username -> username
+            else -> "$displayName ($username)"
+        }
+}
+
+/** The watch's key as Settings › Watch shows it (never the key itself). */
+data class WatchKeyInfo(val keyId: String, val name: String, val createdAt: String?, val refused: Boolean)
+
+/** The watch's key itself, for the relay and the hand-over to the watch. */
+class StoredWatchKey(val key: DeviceKey, val keyId: String, val refused: Boolean) {
+    override fun toString() = "StoredWatchKey($keyId, refused=$refused)"
+}
+
+/** A Custom Tab pairing on its way (the browser has the page; the link comes back with [state]). */
+class PendingPairing(val server: String, val state: String, val verifier: String, val startedAtMillis: Long) {
+    override fun toString() = "PendingPairing($server, …)"
+}
+
 /**
- * The server address and the service token. The token's two values are kept
- * only as [SecretCipher] ciphertext in the DataStore; the address is plain.
- * Nothing here logs.
+ * The server address and the phone's credentials there: the device key
+ * (once paired with an account, P21-06), the Cloudflare Access service
+ * token, and the watch's key the phone made. Secrets are kept only as
+ * [SecretCipher] ciphertext in the DataStore; the address, key ids and the
+ * account's names are plain. Nothing here logs.
+ *
+ * The device key always belongs to the saved server: saving another server
+ * forgets the pairing, and pairing with another server forgets the service
+ * token, which belongs to the old server's Access.
  */
-class TokenStore(private val store: DataStore<Preferences>, private val cipher: SecretCipher) : WearTokenSource {
+class TokenStore(private val store: DataStore<Preferences>, private val cipher: SecretCipher) : DeviceKeyListener {
     /** The last ciphertext opened and its result, so a request costs no Keystore work. */
     @Volatile
     private var opened: Pair<List<String?>, Connection?>? = null
 
+    @Volatile
+    private var openedWatch: Pair<String, DeviceKey?>? = null
+
     /** The current connection, or null when the phone is not set up (or the key was lost). */
     val connection: Flow<Connection?> = store.data.map(::open)
 
+    /** The pairing, or null while the phone is not paired. */
+    val pairing: Flow<Pairing?> = store.data.map(::pairingOf)
+
+    /** Whether the owner dismissed Home's "Pair this phone" card. */
+    val pairPromptDismissed: Flow<Boolean> = store.data.map { it[PAIR_PROMPT_DISMISSED] == true }
+
     suspend fun current(): Connection? = connection.first()
 
-    /** What the watch gets (docs/wear.md): the phone's server and token, until each device has its own. */
-    override suspend fun load(): WearCredentials? = current()?.let { WearCredentials(it.baseUrl, it.token.clientId, it.token.clientSecret) }
+    suspend fun currentPairing(): Pairing? = pairing.first()
 
     /** The saved server address, or the default. */
     suspend fun serverUrl(): String = store.data.first()[SERVER_URL] ?: ServerUrl.DEFAULT
 
+    /**
+     * Saves [baseUrl] and its service token. Another server than the saved
+     * one forgets the pairing: a device key belongs to its server.
+     */
     suspend fun save(baseUrl: String, token: ServiceToken) {
         val url = requireNotNull(ServerUrl.normalize(baseUrl)) { "not an https URL" }
         require(token.clientId.isNotBlank() && token.clientSecret.isNotBlank()) { "both values are required" }
         val id = cipher.encrypt(token.clientId)
         val secret = cipher.encrypt(token.clientSecret)
         store.edit {
+            if ((it[SERVER_URL] ?: ServerUrl.DEFAULT) != url) removePairing(it)
             it[SERVER_URL] = url
             it[CLIENT_ID] = id
             it[CLIENT_SECRET] = secret
         }
     }
 
-    /** Sign out: forgets the token, keeps the server address for the next sign-in. */
+    /**
+     * Keeps the device key Life OS issued at [server] for this phone, named
+     * [deviceName]. A previous pairing and its watch key go; so does the
+     * service token when [server] is another server.
+     */
+    suspend fun savePairing(server: String, paired: PairedDevice, deviceName: String, now: Instant = Instant.now()) {
+        val url = requireNotNull(ServerUrl.normalize(server)) { "not an https URL" }
+        val key = requireNotNull(DeviceKey.parse(paired.key)) { "not a device key" }
+        val sealed = cipher.encrypt(key.value)
+        store.edit {
+            if ((it[SERVER_URL] ?: ServerUrl.DEFAULT) != url) {
+                it.remove(CLIENT_ID)
+                it.remove(CLIENT_SECRET)
+            }
+            removePairing(it)
+            it[SERVER_URL] = url
+            it[DEVICE_KEY] = sealed
+            it[DEVICE_KEY_ID] = paired.keyId
+            it[DEVICE_NAME] = paired.name.ifBlank { deviceName }
+            paired.user?.username?.takeIf { name -> name.isNotBlank() }?.let { name -> it[ACCOUNT_USERNAME] = name }
+            paired.user?.name?.takeIf { name -> name.isNotBlank() }?.let { name -> it[ACCOUNT_NAME] = name }
+            it[PAIRED_AT] = paired.createdAt ?: now.toString()
+        }
+    }
+
+    /** What `GET /api/auth/devices/me` said: the account's names may have changed. */
+    suspend fun updateIdentity(identity: DeviceIdentity) {
+        store.edit {
+            if (it[DEVICE_KEY_ID] != identity.keyId) return@edit
+            identity.user?.username?.takeIf { name -> name.isNotBlank() }?.let { name -> it[ACCOUNT_USERNAME] = name }
+            val name = identity.user?.name?.takeIf { name -> name.isNotBlank() }
+            if (name != null) it[ACCOUNT_NAME] = name else it.remove(ACCOUNT_NAME)
+            if (identity.name.isNotBlank()) it[DEVICE_NAME] = identity.name
+        }
+    }
+
+    /** Unpair: forgets the device key and the watch's; the service token, if any, stays. */
+    suspend fun clearPairing() {
+        store.edit { removePairing(it) }
+    }
+
+    /** Sign out: forgets the token, the pairing and the watch's key; keeps the server address for the next sign-in. */
     suspend fun clear() {
         store.edit {
             it.remove(CLIENT_ID)
             it.remove(CLIENT_SECRET)
+            removePairing(it)
+            removePending(it)
+            it.remove(PAIR_PROMPT_DISMISSED)
         }
     }
 
+    suspend fun dismissPairPrompt() {
+        store.edit { it[PAIR_PROMPT_DISMISSED] = true }
+    }
+
+    // ---- What Life OS said about the keys (DeviceKeyListener)
+
+    /** Life OS answered 401 to [key]: if it is still this phone's key, the phone must pair again. */
+    override suspend fun refused(key: DeviceKey) {
+        if (current()?.deviceKey != key) return
+        store.edit { it[DEVICE_REFUSED] = true }
+    }
+
+    /** A success with [key]: a "no longer connected" from an earlier answer is over. */
+    override suspend fun accepted(key: DeviceKey) {
+        if (store.data.first()[DEVICE_REFUSED] != true || current()?.deviceKey != key) return
+        store.edit { it.remove(DEVICE_REFUSED) }
+    }
+
+    // ---- The watch's key (made by this phone, POST /api/auth/devices/child)
+
+    /** The watch's key, when this phone made one with its current key. */
+    suspend fun watchKey(): StoredWatchKey? {
+        val preferences = store.data.first()
+        val sealed = preferences[WATCH_KEY] ?: return null
+        val keyId = preferences[WATCH_KEY_ID] ?: return null
+        if (preferences[WATCH_PARENT_ID] == null || preferences[WATCH_PARENT_ID] != preferences[DEVICE_KEY_ID]) return null
+        val key = openWatch(sealed) ?: return null
+        return StoredWatchKey(key, keyId, refused = preferences[WATCH_REFUSED] == true)
+    }
+
+    /** Keeps the watch's new key, made by the phone key [parentKeyId]; it replaces the previous one. */
+    suspend fun saveWatchKey(child: ChildKey, parentKeyId: String, watchName: String, now: Instant = Instant.now()) {
+        val key = requireNotNull(DeviceKey.parse(child.key)) { "not a device key" }
+        val sealed = cipher.encrypt(key.value)
+        store.edit {
+            // The phone was unpaired or paired again meanwhile: this key belongs to no current pairing.
+            if (it[DEVICE_KEY_ID] != parentKeyId) return@edit
+            it[WATCH_KEY] = sealed
+            it[WATCH_KEY_ID] = child.keyId
+            it[WATCH_PARENT_ID] = parentKeyId
+            it[WATCH_NAME] = child.name.ifBlank { watchName }
+            it[WATCH_CREATED_AT] = child.createdAt ?: now.toString()
+            it.remove(WATCH_REFUSED)
+        }
+    }
+
+    suspend fun watchKeyRefused(key: DeviceKey) {
+        if (watchKey()?.key != key) return
+        store.edit { it[WATCH_REFUSED] = true }
+    }
+
+    suspend fun watchKeyAccepted(key: DeviceKey) {
+        if (store.data.first()[WATCH_REFUSED] != true || watchKey()?.key != key) return
+        store.edit { it.remove(WATCH_REFUSED) }
+    }
+
+    // ---- The Custom Tab flow's verifier and state, while the browser has the page
+
+    suspend fun savePending(pending: PendingPairing) {
+        val verifier = cipher.encrypt(pending.verifier)
+        store.edit {
+            it[PENDING_SERVER] = pending.server
+            it[PENDING_STATE] = pending.state
+            it[PENDING_VERIFIER] = verifier
+            it[PENDING_AT] = pending.startedAtMillis
+        }
+    }
+
+    /** The pairing the browser was opened for, if it is younger than [maxAgeMillis]. */
+    suspend fun pending(nowMillis: Long = System.currentTimeMillis(), maxAgeMillis: Long = PENDING_MAX_AGE_MILLIS): PendingPairing? {
+        val preferences = store.data.first()
+        val server = preferences[PENDING_SERVER] ?: return null
+        val state = preferences[PENDING_STATE] ?: return null
+        val sealed = preferences[PENDING_VERIFIER] ?: return null
+        val at = preferences[PENDING_AT] ?: return null
+        if (nowMillis - at !in 0..maxAgeMillis) return null
+        val verifier = try {
+            cipher.decrypt(sealed)
+        } catch (_: GeneralSecurityException) {
+            return null
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        return PendingPairing(server, state, verifier, at)
+    }
+
+    suspend fun clearPending() {
+        store.edit { removePending(it) }
+    }
+
+    // ---- Reading
+
     private fun open(preferences: Preferences): Connection? {
-        val sealed = listOf(preferences[SERVER_URL], preferences[CLIENT_ID], preferences[CLIENT_SECRET])
+        val sealed = listOf(preferences[SERVER_URL], preferences[CLIENT_ID], preferences[CLIENT_SECRET], preferences[DEVICE_KEY])
         opened?.let { (key, connection) -> if (key == sealed) return connection }
         val connection = decrypt(preferences)
         opened = sealed to connection
@@ -176,17 +374,64 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     }
 
     private fun decrypt(preferences: Preferences): Connection? {
-        val id = preferences[CLIENT_ID] ?: return null
-        val secret = preferences[CLIENT_SECRET] ?: return null
+        val id = preferences[CLIENT_ID]
+        val secret = preferences[CLIENT_SECRET]
+        val sealedKey = preferences[DEVICE_KEY]
         val url = preferences[SERVER_URL] ?: ServerUrl.DEFAULT
         return try {
-            Connection(url, ServiceToken(cipher.decrypt(id), cipher.decrypt(secret)))
+            val token = if (id != null && secret != null) ServiceToken(cipher.decrypt(id), cipher.decrypt(secret)) else null
+            val key = sealedKey?.let { DeviceKey.parse(cipher.decrypt(it)) ?: throw IllegalArgumentException("not a device key") }
+            if (token == null && key == null) null else Connection(url, token, key)
         } catch (_: GeneralSecurityException) {
             // The Keystore key is gone (e.g. app data restored on another phone): the ciphertext is useless.
             null
         } catch (_: IllegalArgumentException) {
             null
         }
+    }
+
+    private fun openWatch(sealed: String): DeviceKey? {
+        openedWatch?.let { (key, value) -> if (key == sealed) return value }
+        val key = try {
+            DeviceKey.parse(cipher.decrypt(sealed))
+        } catch (_: GeneralSecurityException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+        openedWatch = sealed to key
+        return key
+    }
+
+    private fun pairingOf(preferences: Preferences): Pairing? {
+        if (preferences[DEVICE_KEY] == null) return null
+        val keyId = preferences[DEVICE_KEY_ID] ?: return null
+        val watch = preferences[WATCH_KEY_ID]?.takeIf { preferences[WATCH_KEY] != null && preferences[WATCH_PARENT_ID] == keyId }?.let {
+            WatchKeyInfo(it, preferences[WATCH_NAME].orEmpty(), preferences[WATCH_CREATED_AT], preferences[WATCH_REFUSED] == true)
+        }
+        return Pairing(
+            server = preferences[SERVER_URL] ?: ServerUrl.DEFAULT,
+            keyId = keyId,
+            deviceName = preferences[DEVICE_NAME].orEmpty(),
+            username = preferences[ACCOUNT_USERNAME],
+            displayName = preferences[ACCOUNT_NAME],
+            pairedAt = preferences[PAIRED_AT],
+            refused = preferences[DEVICE_REFUSED] == true,
+            watch = watch,
+        )
+    }
+
+    private fun removePairing(preferences: MutablePreferences) {
+        for (key in listOf(DEVICE_KEY, DEVICE_KEY_ID, DEVICE_NAME, ACCOUNT_USERNAME, ACCOUNT_NAME, PAIRED_AT, WATCH_KEY, WATCH_KEY_ID, WATCH_PARENT_ID, WATCH_NAME, WATCH_CREATED_AT)) {
+            preferences.remove(key)
+        }
+        preferences.remove(DEVICE_REFUSED)
+        preferences.remove(WATCH_REFUSED)
+    }
+
+    private fun removePending(preferences: MutablePreferences) {
+        for (key in listOf(PENDING_SERVER, PENDING_STATE, PENDING_VERIFIER)) preferences.remove(key)
+        preferences.remove(PENDING_AT)
     }
 
     /**
@@ -221,9 +466,33 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         internal var installed: TokenStore? = null
             private set
 
+        /** How long the browser may take for the Custom Tab flow (the code itself works 5 minutes). */
+        const val PENDING_MAX_AGE_MILLIS = 15 * 60_000L
+
         private val SERVER_URL = stringPreferencesKey("server-url")
         private val CLIENT_ID = stringPreferencesKey("client-id")
         private val CLIENT_SECRET = stringPreferencesKey("client-secret")
+
+        // The pairing (P21-06).
+        private val DEVICE_KEY = stringPreferencesKey("device-key")
+        private val DEVICE_KEY_ID = stringPreferencesKey("device-key-id")
+        private val DEVICE_NAME = stringPreferencesKey("device-name")
+        private val DEVICE_REFUSED = booleanPreferencesKey("device-key-refused")
+        private val ACCOUNT_USERNAME = stringPreferencesKey("device-account-username")
+        private val ACCOUNT_NAME = stringPreferencesKey("device-account-name")
+        private val PAIRED_AT = stringPreferencesKey("device-paired-at")
+        private val WATCH_KEY = stringPreferencesKey("watch-key")
+        private val WATCH_KEY_ID = stringPreferencesKey("watch-key-id")
+        private val WATCH_PARENT_ID = stringPreferencesKey("watch-key-parent-id")
+        private val WATCH_NAME = stringPreferencesKey("watch-key-name")
+        private val WATCH_CREATED_AT = stringPreferencesKey("watch-key-created-at")
+        private val WATCH_REFUSED = booleanPreferencesKey("watch-key-refused")
+        private val PENDING_SERVER = stringPreferencesKey("pair-pending-server")
+        private val PENDING_STATE = stringPreferencesKey("pair-pending-state")
+        private val PENDING_VERIFIER = stringPreferencesKey("pair-pending-verifier")
+        private val PENDING_AT = longPreferencesKey("pair-pending-at")
+        private val PAIR_PROMPT_DISMISSED = booleanPreferencesKey("pair-prompt-dismissed")
+
         private const val LEGACY_PREFERENCES = "service-token"
         private const val LEGACY_ID = "client-id"
         private const val LEGACY_SECRET = "client-secret"
