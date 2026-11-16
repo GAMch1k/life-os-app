@@ -3,6 +3,7 @@ package com.gamch1k.lifeos.core.wearlink
 import com.gamch1k.lifeos.core.TestDataStores
 import com.gamch1k.lifeos.core.api.FakeTransport
 import com.gamch1k.lifeos.core.api.TransportException
+import com.gamch1k.lifeos.core.pairing.WatchKeys
 import com.gamch1k.lifeos.core.secrets.SecretCipher
 import com.gamch1k.lifeos.core.secrets.ServiceToken
 import com.gamch1k.lifeos.core.secrets.TokenStore
@@ -31,7 +32,7 @@ class PhoneWearLinkHostTest {
         val tokens = TokenStore(stores.create(), PlainCipher)
         if (signedIn) tokens.save("https://lifeos.example.com", FakeTransport.TOKEN)
         val client = FakeTransport.client(transport, connection = if (signedIn) FakeTransport.CONNECTION else null)
-        val host = PhoneWearLinkHost(tokens, client)
+        val host = PhoneWearLinkHost(WatchKeys(tokens, client) { null }, client)
         PhoneWearLinkHandler(host.wearTokenSource, host.wearRelay)
     }
 
@@ -90,19 +91,21 @@ class PhoneWearLinkHostTest {
     @Test
     fun `a new token reaches the watch at once`() = runBlocking {
         val tokens = TokenStore(stores.create(), PlainCipher)
+        val keys = WatchKeys(tokens, FakeTransport.client(transport)) { null }
         tokens.save("https://lifeos.example.com", FakeTransport.TOKEN)
         tokens.save("https://lifeos.example.com", ServiceToken("new.access", "new-secret"))
-        assertEquals("new.access", tokens.load()!!.clientId)
+        assertEquals("new.access", keys.load()!!.clientId)
         tokens.clear()
-        assertNull(tokens.load())
+        assertNull(keys.load())
     }
 
     @Test
     fun `a new server reaches the watch at once`() = runBlocking {
         val tokens = TokenStore(stores.create(), PlainCipher)
+        val keys = WatchKeys(tokens, FakeTransport.client(transport)) { null }
         tokens.save("https://lifeos.example.com", FakeTransport.TOKEN)
         // Settings › Change server or token: the watch follows the phone's server.
         tokens.save("my-own.example.org", ServiceToken("own.access", "own-secret"))
-        assertEquals(WearCredentials("https://my-own.example.org", "own.access", "own-secret"), tokens.load())
+        assertEquals(WearCredentials("https://my-own.example.org", "own.access", "own-secret"), keys.load())
     }
 }

@@ -150,11 +150,11 @@ class DirectDownload(
         if (held == size) return Outcome.Downloaded
         onStage(Stage.DOWNLOADING, held)
         val headers = buildMap {
-            // A token belongs to its server: the update origin gets it only when that is the server; GitHub never.
+            // Credentials belong to their server: the update origin gets them (the watch's key once
+            // paired, Access's token) only when that is the server; GitHub never.
             val token = target.token
             if (token != null && LifeOsEndpoints.sameOrigin(token.baseUrl, updatesUrl)) {
-                put("CF-Access-Client-Id", token.clientId)
-                put("CF-Access-Client-Secret", token.clientSecret)
+                putAll(token.headers(actor = false))
             }
             put("User-Agent", userAgent)
             put("Accept", "*/*")
@@ -287,7 +287,7 @@ class DirectDownload(
         } else {
             when (status) {
                 in 300..399 -> "Life OS answered $status (Cloudflare Access did not let the watch's token in)"
-                401, 403 -> "Life OS refused the watch's token ($status)"
+                401, 403 -> "Life OS refused the watch's key or token ($status)"
                 404 -> "the APK is not on Life OS (404)"
                 416 -> "Life OS refused the range (416)"
                 else -> "Life OS answered $status"

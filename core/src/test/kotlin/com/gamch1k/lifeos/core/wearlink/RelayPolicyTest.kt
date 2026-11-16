@@ -3,6 +3,7 @@ package com.gamch1k.lifeos.core.wearlink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RelayPolicyTest {
@@ -73,6 +74,42 @@ class RelayPolicyTest {
         assertEquals(HttpOutcome.RETRYABLE, HttpOutcome.of(429))
         assertEquals(HttpOutcome.RETRYABLE, HttpOutcome.of(502))
         assertEquals(HttpOutcome.RETRYABLE, HttpOutcome.of(524))
+    }
+
+    @Test
+    fun `for the watch, Life OS's 403 module_not_allowed is a refusal, Access's 403 and any 401 need new credentials`() {
+        fun body(code: String) = """{"error":{"code":"$code","message":"…"}}""".toByteArray()
+        assertEquals(HttpOutcome.PERMANENT, HttpOutcome.of(403, body("module_not_allowed")))
+        assertEquals(HttpOutcome.PERMANENT, HttpOutcome.of(403, body("admin_only")))
+        assertEquals("the gateway's forbidden: no Access token", HttpOutcome.AUTH, HttpOutcome.of(403, body("forbidden")))
+        assertEquals("Cloudflare's page", HttpOutcome.AUTH, HttpOutcome.of(403, "<html>Forbidden</html>".toByteArray()))
+        assertEquals(HttpOutcome.AUTH, HttpOutcome.of(401, body("unauthenticated")))
+        assertEquals(HttpOutcome.AUTH, HttpOutcome.of(403, null))
+        assertEquals(HttpOutcome.SUCCESS, HttpOutcome.of(200, body("module_not_allowed")))
+    }
+
+    @Test
+    fun `the watch's credentials carry its key, the Access token, and the actor only without a key`() {
+        val key = "lo_dev_" + "W".repeat(64)
+        val both = WearCredentials("https://lifeos.example.com", "id.access", "secret", key)
+        assertTrue(both.isComplete)
+        assertEquals(
+            mapOf("Authorization" to "Bearer $key", "CF-Access-Client-Id" to "id.access", "CF-Access-Client-Secret" to "secret"),
+            both.headers(actor = true),
+        )
+        val keyOnly = WearCredentials("https://lifeos.example.com", deviceKey = key)
+        assertTrue("a server without Access", keyOnly.isComplete)
+        assertEquals(mapOf("Authorization" to "Bearer $key"), keyOnly.headers(actor = true))
+        val tokenOnly = WearCredentials("https://lifeos.example.com", "id.access", "secret")
+        assertEquals("user", tokenOnly.headers(actor = true)["X-Life-OS-Actor"])
+        assertFalse(tokenOnly.headers(actor = false).containsKey("X-Life-OS-Actor"))
+        assertFalse(WearCredentials("https://lifeos.example.com").isComplete)
+        assertFalse(both.toString().contains(key))
+
+        // A 0.4 watch reads a 0.5 phone's credentials: the key is a field it ignores.
+        val json = RelayCodec.json.encodeToString(WearCredentials.serializer(), both)
+        assertTrue(json.contains("\"clientId\":\"id.access\""))
+        assertEquals(both, RelayCodec.json.decodeFromString(WearCredentials.serializer(), json))
     }
 
     @Test

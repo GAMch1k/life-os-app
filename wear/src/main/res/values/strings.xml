@@ -55,10 +55,12 @@
     <string name="phone_not_connected">Not connected: direct calls</string>
     <string name="token">Token</string>
     <string name="token_received">From the phone, %1$s</string>
+    <!-- P21-06: the phone is paired, and the watch has a device key of its own. -->
+    <string name="key_received">Own key, from the phone, %1$s</string>
     <string name="token_missing">None yet</string>
     <string name="get_token">Get token from phone</string>
     <string name="token_fetch_received">Token received</string>
-    <string name="token_fetch_phone_has_none">The phone has no token. Save it in the phone app.</string>
+    <string name="token_fetch_phone_has_none">The phone has nothing for the watch. Open Life OS on the phone: Settings › Watch.</string>
     <string name="token_fetch_no_phone">Phone not connected</string>
     <string name="token_fetch_failed">The phone answered something unreadable</string>
     <string name="test_connection">Test connection</string>

@@ -182,6 +182,26 @@ class DirectDownloadTest {
         assertEquals(size, seen.positions.last())
     }
 
+    @Test
+    fun `a paired watch downloads with its own key, and the key never goes to GitHub`() {
+        val key = "lo_dev_" + "W".repeat(64)
+        val paired = WearCredentials("https://lifeos.example.com", "id.access", "secret", key)
+        val http = FakeHttp()
+        assertEquals(DirectDownload.Outcome.Downloaded, fetch(download(FakeNetworks(), http), partial(), credentials = paired))
+        val headers = http.requests.single().second
+        assertEquals("Bearer $key", headers["Authorization"])
+        assertEquals("id.access", headers["CF-Access-Client-Id"])
+        assertNull("no actor on a download", headers["X-Life-OS-Actor"])
+
+        val keyOnly = WearCredentials("https://lifeos.example.com", deviceKey = key)
+        assertTrue("a server without Access: the key alone is enough", DirectDownload.worthTrying(url, keyOnly, held = 0, size = size))
+        val github = FakeHttp().apply { redirects[githubUrl] = assetHost }
+        val fresh = PartialApk(File(folder.root, "github-partial"))
+        assertEquals(DirectDownload.Outcome.Downloaded, fetch(fromGitHub(FakeNetworks(), github), fresh, url = githubUrl, credentials = paired))
+        assertEquals(2, github.requests.size)
+        github.requests.forEach { (_, sent) -> assertNull("no key goes to GitHub", sent["Authorization"]) }
+    }
+
     // ---- The update origin
 
     @Test

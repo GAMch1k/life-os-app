@@ -59,7 +59,9 @@ fun ConnectionScreen(viewModel: WearViewModel) {
                         stringResource(R.string.token_missing)
                     } else {
                         val at = Instant.ofEpochMilli(stored.receivedAtMillis).atZone(ZoneId.systemDefault())
-                        stringResource(R.string.token_received, at.format(DateTimeFormatter.ofPattern(if (use24Hour) "yyyy-MM-dd HH:mm" else "yyyy-MM-dd h:mm a")))
+                        val time = at.format(DateTimeFormatter.ofPattern(if (use24Hour) "yyyy-MM-dd HH:mm" else "yyyy-MM-dd h:mm a"))
+                        // P21-06: once the phone is paired, the watch has a key of its own.
+                        stringResource(if (stored.credentials.hasDeviceKey) R.string.key_received else R.string.token_received, time)
                     },
                 )
             }
