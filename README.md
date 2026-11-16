@@ -196,7 +196,7 @@ The service token's steps:
 1. Cloudflare dashboard → Zero Trust → **Access controls → Service credentials → Service Tokens → Create Service Token**. Name it `life-os-phone`, pick a duration, **Generate token**, and copy the Client ID (it ends in `.access`) and the Client Secret, which Cloudflare shows only once.
 2. **Access controls → Policies → Add a policy**: Action **Service Auth**, Include → **Service Token** → `life-os-phone`, **Save**.
 3. **Access controls → Applications → Life OS → Configure → Policies → Select existing policies**, tick the new policy, **Confirm**, **Save**. Service Auth policies are evaluated before the owner's Allow policy, which keeps working.
-4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`, with the device key too once paired) and, when Life OS answers, saves it and opens Today, which then offers pairing.
+4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`, with the device key too once paired) and, when Life OS answers, saves it and opens Today, which then offers pairing. When Life OS answers with its own 401 (legacy access is off, so it wants a sign-in), Access has let the token through: the app saves it and opens pairing.
 
 To revoke the phone: **Settings → Devices** in Life OS signs its key out; delete its token in Cloudflare. **Sign out** (Settings) signs the key out of Life OS and removes it, the token, the cached Today and the queue from the phone. To switch servers or tokens later: **Settings › Connection › Edit connection**.
 

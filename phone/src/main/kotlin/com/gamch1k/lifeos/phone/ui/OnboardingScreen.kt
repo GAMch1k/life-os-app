@@ -108,8 +108,13 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         return url
     }
 
-    /** Tests the connection; [onPassed] runs after a passed test (the screen saves then). */
-    fun test(onPassed: (() -> Unit)? = null) {
+    /**
+     * Tests the connection; [onPassed] runs after a passed test (the screen
+     * saves then). [onNeedsPairing] runs when Access let the token through
+     * but Life OS wants a sign-in (legacy access is off): the token is right,
+     * and pairing comes next, which needs the token saved first.
+     */
+    fun test(onPassed: (() -> Unit)? = null, onNeedsPairing: (() -> Unit)? = null) {
         val (url, token) = parsed() ?: return
         state.update { it.copy(testing = true, message = null) }
         viewModelScope.launch {
@@ -129,6 +134,17 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                 onPassed?.invoke()
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (error: LifeOsException.SignInRequired) {
+                // Life OS's own 401: Cloudflare Access let the token through.
+                state.update {
+                    it.copy(
+                        testing = false,
+                        tested = Triple(url, token.clientId, token.clientSecret),
+                        message = "Cloudflare Access let the phone through. Life OS asks for a sign-in: pair this phone next.",
+                        messageIsError = false,
+                    )
+                }
+                onNeedsPairing?.invoke()
             } catch (error: LifeOsException) {
                 val hint = if (!token.clientId.endsWith(".access") && error.authProblem) " The Client ID normally ends in .access." else ""
                 state.update {
@@ -236,7 +252,17 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 // A passed test saves and continues by itself; the second button
                 // stays for saving after a test that failed only for being offline.
                 Button(
-                    onClick = { viewModel.test(onPassed = { viewModel.save { navigator.reset(Screen.Home) } }) },
+                    onClick = {
+                        viewModel.test(
+                            onPassed = { viewModel.save { navigator.reset(Screen.Home) } },
+                            onNeedsPairing = {
+                                viewModel.save {
+                                    navigator.reset(Screen.Home)
+                                    navigator.go(Screen.Pair())
+                                }
+                            },
+                        )
+                    },
                     enabled = !state.testing && !state.saving,
                 ) { Text("Connect") }
                 if (testedCurrent || state.canSaveUntested) {
