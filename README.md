@@ -8,8 +8,8 @@ The plan lives in Notion ("Android & Wear OS apps — plan", Phase 18 and Phase 
 
 | Path | What |
 |---|---|
-| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the service-token store, the capture queue's logic, Today, the update rules (the phone's and the watch's), the phone–watch link, the watch setup's state machine, the network check, and Snooze's rules. Most unit tests live here; the wear app's are in `wear/src/test`. |
-| `phone/` | The phone app ([below](#the-phone-app)): onboarding, Today, capture with an offline queue, self-update, the watch app's setup and updates, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
+| `core/` | Android library shared by the apps: the Life OS API client over embedded Cronet, the token store (the service token and the device keys), pairing (the link, the code, the Custom Tab's challenge, the watch's key, the QR code from a photo), the capture queue's logic, Today, the update rules (the phone's and the watch's), the phone–watch link, the watch setup's state machine, the network check, and Snooze's rules. Most unit tests live here; the wear app's are in `wear/src/test`. |
+| `phone/` | The phone app ([below](#the-phone-app)): onboarding, pairing with an account, Today, capture with an offline queue, self-update, the watch app's setup and updates, and the **Network check** ([docs/network-check.md](docs/network-check.md)) under Settings. |
 | `wear/` | The Wear OS app: voice capture, the Capture and Today tiles, the "Life OS next" and "Life OS capture" complications, updates through the phone ([docs/wear.md](docs/wear.md)). |
 | `tools/build` | Builds everything on the server, in a container. |
 | `tools/builder/` | The builder image (`Dockerfile`) and the script that runs inside it (`in-container`). |
@@ -22,6 +22,8 @@ Both apps use the `applicationId` **`com.gamch1k.lifeos`**. Phone: minSdk 34, ta
 Main versions: AGP 9.5.1 (built-in Kotlin), Kotlin 2.4.21, Gradle 9.9.0, Compose BOM 2026.09.00, Compose for Wear OS Material 3 1.7.1, Cronet 500.1.0 (`org.chromium.net:cronet-bundled`, Chromium 155.0.8059.16), JDK 21.
 
 The watch setup (P19-06, phone only) uses [libadb-android](https://github.com/MuntashirAkon/libadb-android) 3.1.1 (`com.github.MuntashirAkon:libadb-android`, from JitPack). It is dual-licensed GPL-3.0-or-later or Apache-2.0; **we use it under Apache-2.0**. It brings SPAKE2 (`com.github.MuntashirAkon.spake2-java:spake2-android` 2.2.1, LGPL-3.0, a small JNI library linked dynamically) and BouncyCastle 1.86 (MIT); the phone adds Conscrypt 2.9.0 (`org.conscrypt:conscrypt-android`, Apache-2.0), which pairing needs for TLS 1.3's keying-material export, and BouncyCastle's `bcpkix` for the ADB key's certificate. JitPack is a repository for exactly these two groups (`exclusiveContent` in `settings.gradle.kts`); everything else comes from Google and Maven Central.
+
+Pairing (P21-06) reads the Dashboard's pairing QR code with [ZXing](https://github.com/zxing/zxing) core 3.5.4 (`com.google.zxing:core`, **Apache-2.0**, pure Java, no native code), from a photo that the camera app takes, as Photo capture does. So the app asks for no camera permission (declaring one would make Android refuse Photo capture's camera intent until it is granted), and uses neither ML Kit nor CameraX. It lives in core (`core/…/pairing/QrCodes.kt`); R8 leaves it out of the wear APK, which never calls it.
 
 The phone APK is about 16.1 MB. Embedded Cronet's native library for arm64 accounts for 7.3 MB of it, and since 0.4.0 Conscrypt's for 2.7 MB (the watch setup; BouncyCastle's unused resources are left out); the APK carries only arm64 code. The wear APK is about 5.9 MB since 0.4.5 (6.6 MB in 0.4.3 and 0.4.4, 16.6 MB before): it embeds Cronet too (for calls without the phone and its own update download), for `armeabi-v7a` only, and stores its native code and dex compressed, which the watch extracts at install. The Galaxy Watch 8 runs 32-bit apps only (it reports `armeabi-v7a, armeabi`), so the watch app is a 32-bit ARM app ([BUG-45](#the-watch-app-setup-and-updates-p19-06-040), [docs/wear.md](docs/wear.md#the-watchs-abis)).
 
@@ -56,10 +58,10 @@ What `tools/build` does:
 
 The apps talk to one Life OS server and get their updates from one place.
 
-- **The server.** At the first run the phone offers the official server, `https://lifeos.gamch1k.com`. It is not forced: type your own Life OS's address instead, or change it later under **Settings › Connection › Edit connection**. A new server needs its own service token, because the token belongs to that server's Cloudflare Access. The watch has no server setting: it takes the server and the token from the phone, and follows a change at once. The network check and the Dashboard links use the server set in the app.
+- **The server.** At the first run the phone offers the official server, `https://lifeos.gamch1k.com`. It is not forced: type your own Life OS's address instead, or change it later under **Settings › Connection › Edit connection**. A new server needs its own service token, because the token belongs to that server's Cloudflare Access, and its own pairing, because a device key belongs to the server that issued it: changing the server signs the phone's key out and forgets it, and pairing with another server forgets the old server's token. The watch has no server setting: it takes the server and its credentials from the phone, and follows a change at once. The network check and the Dashboard links use the server set in the app.
 - **Updates** (P20-06, 0.4.6) come from one of two sources, chosen by the server set in the app (`core/…/update/UpdateSource.kt`), for the phone's manifest and APKs and the watch's own Wi-Fi download alike:
-  - connected to the **update origin**, the official server: its `/android/updates` and `/android/` APKs, behind Cloudflare Access, with the service token. That is the owner's case.
-  - connected to **any other server, or none yet**: the latest **GitHub Release** of this repository, `https://github.com/GAMch1k/life-os-app/releases/latest/download/updates.json`, and the APK assets it names. No token ever goes to GitHub, and the official server's `/android/` stays behind Access.
+  - connected to the **update origin**, the official server: its `/android/updates` and `/android/` APKs, behind Cloudflare Access, with the service token and, once paired, the device key. That is the owner's case.
+  - connected to **any other server, or none yet**: the latest **GitHub Release** of this repository, `https://github.com/GAMch1k/life-os-app/releases/latest/download/updates.json`, and the APK assets it names. No token or key ever goes to GitHub, and the official server's `/android/` stays behind Access.
 
   Both sources carry the same manifest, and the app checks the same things whichever it used: an address of that source only (`/android/` paths for the update origin; for GitHub, assets of a release of this repository, with redirects followed only to `github.com` downloads of its releases and GitHub's asset hosts, at most 5), the manifest's size and SHA-256, then the package, the announced version, a versionCode above the installed one, and a signer that is exactly the installed app's certificate (`ApkRules`), before Android's installer checks the signature again. Nothing is downloaded from anywhere else. **Settings › Updates** says which source is in use. The life-os repository's [`docs/operations/android-releases.md`](https://github.com/GAMch1k/life-os/blob/master/docs/operations/android-releases.md#github-releases) describes how a release is published to both.
 - **Building your own app.** Three build settings decide what is compiled in. They live in core's `BuildConfig` and are read through `core/…/config/LifeOsEndpoints.kt`, so the phone and the watch app always agree:
@@ -184,22 +186,57 @@ To release:
 
 ### First run
 
-The app asks for the server (the official `https://lifeos.gamch1k.com`, or your own Life OS: [Servers](#servers-official-default-your-own-and-updates)) and a Cloudflare Access **service token** made for this phone, with "How to get a token" steps built in:
+The app asks for the server (the official `https://lifeos.gamch1k.com`, or your own Life OS: [Servers](#servers-official-default-your-own-and-updates)), then offers two things, either or both:
+
+- **Pair this phone** with your account ([Pairing](#pairing-with-an-account-p21-06-050)): the phone gets a device key of its own. A server without Cloudflare Access needs nothing else.
+- A Cloudflare Access **service token** made for this phone, when the server is behind Access (the official server is), with "How to get a token" steps built in. With Access in front, connect with the token first, then pair: Access must let the pairing request through.
+
+The service token's steps:
 
 1. Cloudflare dashboard → Zero Trust → **Access controls → Service credentials → Service Tokens → Create Service Token**. Name it `life-os-phone`, pick a duration, **Generate token**, and copy the Client ID (it ends in `.access`) and the Client Secret, which Cloudflare shows only once.
 2. **Access controls → Policies → Add a policy**: Action **Service Auth**, Include → **Service Token** → `life-os-phone`, **Save**.
 3. **Access controls → Applications → Life OS → Configure → Policies → Select existing policies**, tick the new policy, **Confirm**, **Save**. Service Auth policies are evaluated before the owner's Allow policy, which keeps working.
-4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`) and, when Life OS answers, saves it and opens Today.
+4. In the app: paste both values and tap **Connect**: it tests the token (`GET /api/tasks/v1/tasks?limit=1`, with the device key too once paired) and, when Life OS answers, saves it and opens Today, which then offers pairing.
 
-To revoke the phone, delete its token in Cloudflare. **Sign out** (Settings) removes the token, the cached Today and the queue from the phone. To switch servers or tokens later: **Settings › Connection › Edit connection**.
+To revoke the phone: **Settings → Devices** in Life OS signs its key out; delete its token in Cloudflare. **Sign out** (Settings) signs the key out of Life OS and removes it, the token, the cached Today and the queue from the phone. To switch servers or tokens later: **Settings › Connection › Edit connection**.
+
+### Pairing with an account (P21-06, 0.5.0)
+
+Life OS has accounts since P21; the phone and its watch each get a **device key** of their own (`lo_dev_…`), as the life-os repository's [`docs/api/devices.md`](https://github.com/GAMch1k/life-os/blob/master/docs/api/devices.md) describes. No password is stored on the phone, and **Settings → Devices** in the Dashboard lists the phone and, under it, its watch, each with its last use, and signs either out.
+
+**Pairing** (`phone/…/ui/PairScreen.kt`; Settings › Account › **Pair this phone**, Home's card, or the first run):
+
+- **With a second screen**: in the Dashboard, Settings → Devices → Pair a phone → Show a pairing code. **Scan the QR code** opens the camera app; take a photo of the code, and the app reads `lifeos://pair?host=…&code=…` from it (ZXing, no camera permission). Or **type the code** (16 characters, such as `K7QM-2XRP-9VDA-H4TC`; case and dashes don't matter). A camera app that opens the QR code's link by itself hands it to the app too.
+- **On this phone only**: **Sign in on this phone** opens `<server>/login?pair=1&challenge=…&state=…` in a Custom Tab of the default browser. Sign in there (already signed in, you skip that), confirm **Pair**, and the browser returns `lifeos://pair?host=…&code=…&state=…` to the app (`PairLinkActivity`, which also closes the Custom Tab). The app made a random verifier, sent only its SHA-256 (`challenge`, as PKCE does) and a random `state`; it accepts the link only with its own state and redeems the code with the verifier, so a code another app catches is useless. The verifier is kept encrypted while the browser is open (at most 15 minutes).
+- A link from outside (a QR code, another app) is never redeemed silently: the app asks **Pair with lifeos.example.com?**, and says so when that is not the server it is set up for. Only `lifeos://pair` links with an `https://` host, a well-formed code and state, each parameter once, are read (`core/…/pairing/PairingLink.kt`).
+- The app redeems the code once at `POST /api/auth/devices/pair` with the phone's name (its device name from Android, such as "Galaxy S24", at most 64 characters), sending the service token along only when it belongs to that server. A server from before pairing answers 404; the app says so and keeps using its service token. Then it keeps the key, signs the previous key out if it had one, sends captures that failed for a sign-in again, tells the watch, and registers push again, so that the push subscription belongs to the key.
+
+**The key** is encrypted with the same AES-256-GCM Android Keystore key as the service token; only ciphertext is in the `settings` DataStore, and no log line, URL or toString ever holds it. It goes only to the server that issued it (never to GitHub), as `Authorization: Bearer lo_dev_…`, on every native call: Today, captures and voice notes, push registration, update checks and APK downloads from the update origin, the network check's authenticated request, and the watch's relayed requests (with the watch's key). The Cloudflare Access headers go along whenever a service token is set up. `X-Life-OS-Actor: user` is sent only without a key: with one, Life OS acts as the account's user anyway. The share sheet and the Dashboard (Custom Tabs) are the browser's: they sign in through the web login with the browser's own cookie, and never see the key.
+
+**The watch** gets a key of its own: the first time it asks the phone for its credentials, or the phone relays a request for it, the paired phone makes one (`POST /api/auth/devices/child`, named after the watch, such as "Galaxy Watch8 (A1B2)"), keeps it encrypted, hands it to the watch over the Data Layer, and uses it for every request it relays ([docs/wear.md](docs/wear.md#token-handoff)). A phone has one watch key; **Settings › Watch › Connect the watch** (or **Give the watch a new key**) makes a new one, which revokes the old. A watch key Life OS refused is never replaced without that tap: that would undo a sign-out in Settings → Devices.
+
+**When Life OS refuses** (`LifeOsException`, `core/…/api/LifeOsClient.kt`):
+
+| Answer | The app |
+| --- | --- |
+| `401` with Life OS's JSON error, the key sent | "This phone is no longer connected to Life OS": Home and Settings › Account offer **Pair again**. Nothing retries it: captures and shares wait in the queue as failed, and go out after pairing. A voice upload that took longer than 3 minutes is tried once more first (the identity token Life OS hands its services lasts 4 minutes), with the same `Idempotency-Key`. A later success with the key clears the notice. |
+| `401` with Life OS's JSON error, no key | Legacy access is off: Home asks to pair. |
+| `403 module_not_allowed` | "Your account can't use Voice notes (Tasks, Calendar…) on this server": the capture fails with that message (pairing again would not help), and Home leaves the module's part of Today out. |
+| `403` with another Life OS code (`admin_only`…) | A refusal, with Life OS's message. |
+| `401`/`403` from Cloudflare (no JSON), the gateway's `403 forbidden`, a redirect to Access | The service token's problem, as before. |
+| `503 auth_unavailable` | Retried like any 5xx; the key stays. |
+
+**Settings › Account** shows "Paired as Anna (anna) on lifeos.example.com", the phone's name in Settings → Devices, and **Unpair this phone**: Life OS signs the key out (the watch's with it, and their push subscriptions; `POST /api/auth/devices/sign-out`), and the phone forgets both. With a service token the app goes on with it while the server's legacy access is on; without one, unpairing signs the phone out. The section asks `GET /api/auth/devices/me` when it opens, so a revoked key shows at once.
+
+**Upgrading from 0.4**: an app with only the service token keeps working as before while the server's legacy access is on. Home offers pairing on a card (**Not now** hides it; Settings › Account keeps offering it); nothing is forced. Once paired, every call carries the key. The owner turns legacy access off in the Dashboard once the phone and the watch are paired.
 
 ### How it talks to Life OS
 
 - `core/…/api/LifeOsClient.kt` over `CronetTransport`: the embedded Cronet with the built-in DNS resolver (ECH), no QUIC, redirects never followed.
-- Every request sends `CF-Access-Client-Id`, `CF-Access-Client-Secret`, `X-Life-OS-Actor: user` and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.4.0 (7)`.
-- Errors are typed (`LifeOsException`): offline or reset, timeout, **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads, voice uploads with an `Idempotency-Key`) are retried twice on errors that may pass.
-- The token is encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
-- For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the phone's token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a token or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
+- Every request sends `Authorization: Bearer <device key>` once paired, `CF-Access-Client-Id` and `CF-Access-Client-Secret` when a service token is set up, `X-Life-OS-Actor: user` only without a key, and `User-Agent: LifeOS-Android/<versionName> (<versionCode>)`, for example `LifeOS-Android/0.5.0 (14)`.
+- Errors are typed (`LifeOsException`): offline or reset, timeout, Life OS's **401** (the key no longer works, or a sign-in is needed: [Pairing](#pairing-with-an-account-p21-06-050)), **403 `module_not_allowed`**, Cloudflare's **401/403** (Access refused the token), a **redirect to `*.cloudflareaccess.com`** (no Service Auth policy accepts the token), a 4xx with the Life OS error envelope's `code` and `message`, a 5xx. Idempotent calls (reads, completing or reopening a Task, Inbox captures with a dedupe key, content-addressed image uploads, voice uploads with an `Idempotency-Key`) are retried twice on errors that may pass.
+- The token and the keys are encrypted with an AES-256-GCM key in the Android Keystore; only ciphertext is in the `settings` DataStore. A token saved by 0.1.0's network check is moved over once.
+- For the watch link (`docs/wear.md`): `LifeOsClient.relay()` sends a request on the watch's behalf with the watch's own key (once paired) and the phone's service token, follows no redirect, returns every HTTP answer as it is, and throws `NotSignedIn` without a credential or `Offline`/`Timeout`/`Local` without an answer. `ServiceTokenStore(context).load()` is kept as a read-only view of the token store for code that still uses that name.
 
 ### Today
 
@@ -259,7 +296,7 @@ The phone app has a second entry in the app list, **Life OS Capture** (a microph
 
 The phone app is a normal APK. Download `lifeos-phone-….apk` from the [latest release](https://github.com/GAMch1k/life-os-app/releases/latest) (the owner: from `/android/` on the official server), open it on the phone, let Android install apps from that source when it asks, and install. Later builds install over it as long as `versionCode` went up, because the signing key never changes; the app finds them itself ([Updates](#updates-p18-09-p20-06)). The release notes give each APK's SHA-256; to check the signer before the first install, `apksigner verify --print-certs lifeos-phone-….apk` must show the certificate in [Signing](#signing). An app of 0.4.5 or older doesn't know about GitHub Releases: on another server, install the newest release by hand once.
 
-The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (token, tiles, complications, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
+The watch app is installed from the phone: **Settings › Watch › Set up the watch app**, once (no computer, no Play account; [docs/wear.md](docs/wear.md#install-and-updates)). After that, every published wear APK reaches the watch through the phone and installs itself. The rest of the watch's setup (its credentials, tiles, complications, Home key) is in [docs/wear.md](docs/wear.md#setting-up-the-watch-the-owner).
 
 ## Contributing and security
 
