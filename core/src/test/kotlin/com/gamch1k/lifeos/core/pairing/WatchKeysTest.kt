@@ -122,6 +122,17 @@ class WatchKeysTest {
     }
 
     @Test
+    fun `a relayed upload that got there too late is no reason to doubt the watch's key`() {
+        paired()
+        relayTasks()
+        server.identityExpiring = 1
+        val late = relayTasks()
+        assertEquals("the watch gets the answer, and sends it again", 401, late.header.status)
+        assertFalse(runBlocking { tokens.currentPairing()!!.watch!!.refused })
+        assertEquals(200, relayTasks().header.status)
+    }
+
+    @Test
     fun `Connect the watch makes a new key, which revokes the old one`() = runBlocking {
         paired()
         val first = (keys.credential() as WatchKeys.Credential.Key).key

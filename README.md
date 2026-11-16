@@ -220,11 +220,12 @@ Life OS has accounts since P21; the phone and its watch each get a **device key*
 
 | Answer | The app |
 | --- | --- |
-| `401` with Life OS's JSON error, the key sent | "This phone is no longer connected to Life OS": Home and Settings › Account offer **Pair again**. Nothing retries it: captures and shares wait in the queue as failed, and go out after pairing. A voice upload that took longer than 3 minutes is tried once more first (the identity token Life OS hands its services lasts 4 minutes), with the same `Idempotency-Key`. A later success with the key clears the notice. |
-| `401` with Life OS's JSON error, no key | Legacy access is off: Home asks to pair. |
+| `401 unauthenticated` (or `sign_in_required`), the key sent | "This phone is no longer connected to Life OS": Home and Settings › Account offer **Pair again**. Nothing retries it: captures and shares wait in the queue as failed, and go out after pairing. A later success with the key clears the notice. |
+| `401 unauthenticated`, no key | Legacy access is off: Home asks to pair. |
+| `401 identity_expired` | A service got the identity token too late (an upload slower than about 4 minutes). Never the key's fault: an idempotent request (a voice upload with its `Idempotency-Key`) is sent once more at once; otherwise, or if that fails too, it is a failure that may pass, and the capture stays queued and is retried later. The watch retries it the same way. |
 | `403 module_not_allowed` | "Your account can't use Voice notes (Tasks, Calendar…) on this server": the capture fails with that message (pairing again would not help), and Home leaves the module's part of Today out. |
-| `403` with another Life OS code (`admin_only`…) | A refusal, with Life OS's message. |
-| `401`/`403` from Cloudflare (no JSON), the gateway's `403 forbidden`, a redirect to Access | The service token's problem, as before. |
+| `403` with another Life OS code (`credential_not_allowed`, `insufficient_scope`, `forbidden_path`, `admin_only`…), or a `401` with a code that is not a sign-in | A refusal of that request, with Life OS's message (for `credential_not_allowed` and `forbidden_path`, which the app causes only by a bug: "This is a bug in the app: please report it"). Neither the key nor Access is blamed. |
+| `401`/`403` from Cloudflare (no JSON), the gateway's plain `403 forbidden`, a redirect to Access | The service token's problem, as before. |
 | `503 auth_unavailable` | Retried like any 5xx; the key stays. |
 
 **Settings › Account** shows "Paired as Anna (anna) on lifeos.example.com", the phone's name in Settings → Devices, and **Unpair this phone**: Life OS signs the key out (the watch's with it, and their push subscriptions; `POST /api/auth/devices/sign-out`), and the phone forgets both. With a service token the app goes on with it while the server's legacy access is on; without one, unpairing signs the phone out. The section asks `GET /api/auth/devices/me` when it opens, so a revoked key shows at once.

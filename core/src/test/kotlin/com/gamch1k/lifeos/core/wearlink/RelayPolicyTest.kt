@@ -84,6 +84,12 @@ class RelayPolicyTest {
         assertEquals("the gateway's forbidden: no Access token", HttpOutcome.AUTH, HttpOutcome.of(403, body("forbidden")))
         assertEquals("Cloudflare's page", HttpOutcome.AUTH, HttpOutcome.of(403, "<html>Forbidden</html>".toByteArray()))
         assertEquals(HttpOutcome.AUTH, HttpOutcome.of(401, body("unauthenticated")))
+        assertEquals("a slow upload's expired identity token may pass", HttpOutcome.RETRYABLE, HttpOutcome.of(401, body("identity_expired")))
+        assertEquals("another coded 401 is a refusal, not new credentials", HttpOutcome.PERMANENT, HttpOutcome.of(401, body("some_new_code")))
+        assertEquals(HttpOutcome.PERMANENT, HttpOutcome.of(403, body("credential_not_allowed")))
+        assertEquals(HttpOutcome.PERMANENT, HttpOutcome.of(403, body("insufficient_scope")))
+        assertEquals(HttpOutcome.PERMANENT, HttpOutcome.of(403, body("forbidden_path")))
+        assertEquals("Cloudflare's 401", HttpOutcome.AUTH, HttpOutcome.of(401, "<html>401</html>".toByteArray()))
         assertEquals(HttpOutcome.AUTH, HttpOutcome.of(403, null))
         assertEquals(HttpOutcome.SUCCESS, HttpOutcome.of(200, body("module_not_allowed")))
     }

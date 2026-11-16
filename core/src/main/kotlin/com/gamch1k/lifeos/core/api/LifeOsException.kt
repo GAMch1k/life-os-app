@@ -33,6 +33,19 @@ sealed class LifeOsException(message: String, cause: Throwable? = null) : Except
     }
 
     /**
+     * 401 `identity_expired` from a service: the gateway let the request
+     * through, but the identity token it carried ran out before the service
+     * read it (a very slow upload). Never the key's fault: an idempotent
+     * request is sent once more at once, and anything else is retried later
+     * like any failure that may pass (a capture stays queued).
+     */
+    class IdentityExpired : LifeOsException(
+        "Life OS received the request too late to accept it (401 identity_expired, a very slow upload); it is sent again.",
+    ) {
+        override val retryable get() = true
+    }
+
+    /**
      * 403 `module_not_allowed`: the account may not use [module] on this
      * server (an admin turned it off for the person). Not a sign-in
      * problem: pairing again would not help.

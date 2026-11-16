@@ -175,16 +175,24 @@ enum class HttpOutcome {
         }
 
         /**
-         * Like [of], with Life OS's error [body] read: a 403 with its own
-         * error code (`module_not_allowed`, `admin_only`…) is a refusal of
-         * the request, not of the credentials (P21-06). The gateway's plain
-         * `forbidden` stays [AUTH]: it is what tunnel traffic without
+         * Like [of], with Life OS's error [body] read (P21-06): a 401
+         * `identity_expired` (a service got the identity token too late) may
+         * pass, so it is [RETRYABLE], never [AUTH]; only a 401 with a
+         * sign-in code is [AUTH]; a 401 or 403 with another code of Life
+         * OS's (`module_not_allowed`, `credential_not_allowed`…) is a
+         * refusal of the request, not of the credentials. The gateway's
+         * plain `forbidden` stays [AUTH]: it is what tunnel traffic without
          * Access's token gets.
          */
         fun of(status: Int, body: ByteArray?): HttpOutcome {
-            if (status == 403 && body != null) {
+            if ((status == 401 || status == 403) && body != null) {
                 val code = LifeOsClient.errorCode(body)
-                if (code != null && code != "forbidden") return PERMANENT
+                when {
+                    code == null -> Unit
+                    status == 401 && code == LifeOsClient.IDENTITY_EXPIRED -> return RETRYABLE
+                    status == 401 && code != null && code in LifeOsClient.SIGN_IN_CODES -> return AUTH
+                    code != LifeOsClient.FORBIDDEN -> return PERMANENT
+                }
             }
             return of(status)
         }

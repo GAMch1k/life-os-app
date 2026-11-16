@@ -3,11 +3,9 @@ package com.gamch1k.lifeos.core.pairing
 import com.gamch1k.lifeos.core.api.Connection
 import com.gamch1k.lifeos.core.api.DeviceKeyListener
 import com.gamch1k.lifeos.core.api.FakeTransport
-import com.gamch1k.lifeos.core.api.HttpRequest
 import com.gamch1k.lifeos.core.api.HttpTransport
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsException
-import com.gamch1k.lifeos.core.api.ResponseSink
 import com.gamch1k.lifeos.core.secrets.DeviceKey
 import com.gamch1k.lifeos.core.secrets.ServiceToken
 import kotlinx.coroutines.runBlocking
@@ -41,8 +39,8 @@ class PairingClientTest {
         }
     }
 
-    private fun client(transport: HttpTransport = server, clock: () -> Long = { 0L }) =
-        LifeOsClient(transport, { connection }, "LifeOS-Android/test", updatesUrl = server.publicUrl, sleep = {}, keyListener = listener, clockMillis = clock)
+    private fun client(transport: HttpTransport = server) =
+        LifeOsClient(transport, { connection }, "LifeOS-Android/test", updatesUrl = server.publicUrl, sleep = {}, keyListener = listener)
 
     private inline fun <reified E : LifeOsException> expect(noinline block: suspend () -> Unit): E {
         try {
@@ -279,29 +277,77 @@ class PairingClientTest {
     }
 
     @Test
-    fun `a very slow upload's 401 is tried once more, a second 401 is final`() {
-        connection = Connection(server.publicUrl, token, DeviceKey.parse("lo_dev_" + "c".repeat(64)))
-        val unauthenticated = """{"error":{"code":"unauthenticated","message":"Sign in to Life OS first"}}"""
-        var now = 0L
-        val slow = object : HttpTransport {
-            val inner = FakeTransport().json(401, unauthenticated).json(202, """{"id":"job-1","status":"queued"}""")
-            override suspend fun execute(request: HttpRequest, sink: ResponseSink?, onProgress: ((Long) -> Unit)?) =
-                inner.execute(request, sink, onProgress).also { now += 5 * 60_000L }
-        }
+    fun `identity_expired from a slow upload is sent once more, never held against the key`() = runBlocking {
+        val key = pairNow()
+        server.identityExpiring = 1
         val audio = kotlin.io.path.createTempFile().toFile()
-        val job = runBlocking { client(slow, clock = { now }).createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = "c-1") }
+        val job = client().createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = "c-1")
         assertEquals("job-1", job.id)
-        assertEquals(2, slow.inner.requests.size)
-        assertEquals("the same Idempotency-Key", listOf("c-1", "c-1"), slow.inner.requests.map { it.headers["Idempotency-Key"] })
+        val uploads = server.requests.filter { it.url.endsWith("/api/voice/v1/audio-jobs") }
+        assertEquals(2, uploads.size)
+        assertEquals("the same Idempotency-Key, so the retry is safe", listOf("c-1", "c-1"), uploads.map { it.headers["Idempotency-Key"] })
+        assertEquals(listOf(key.bearer, key.bearer), uploads.map { it.headers["Authorization"] })
+        assertFalse(verdicts.contains("refused"))
+        assertFalse("the key still works", server.key(key.value)!!.revoked)
+    }
 
-        val twice = FakeTransport().json(401, unauthenticated).json(401, unauthenticated)
-        val slowTwice = object : HttpTransport {
-            override suspend fun execute(request: HttpRequest, sink: ResponseSink?, onProgress: ((Long) -> Unit)?) =
-                twice.execute(request, sink, onProgress).also { now += 5 * 60_000L }
-        }
-        expect<LifeOsException.SignInRequired> { client(slowTwice, clock = { now }).createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = "c-1") }
-        assertEquals(2, twice.requests.size)
-        assertEquals(listOf("accepted", "refused"), verdicts)
+    @Test
+    fun `identity_expired twice, or on a call that is not idempotent, is a failure that may pass, not a sign-in`() {
+        pairNow()
+        server.identityExpiring = 2
+        val audio = kotlin.io.path.createTempFile().toFile()
+        val twice = expect<LifeOsException.IdentityExpired> { client().createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = "c-1") }
+        assertTrue("a capture stays queued", twice.retryable)
+        assertFalse(twice.authProblem)
+        assertEquals("once more only", 2, server.requests.count { it.url.endsWith("/api/voice/v1/audio-jobs") })
+
+        server.identityExpiring = 1
+        expect<LifeOsException.IdentityExpired> { client().createAudioJob(audio, "audio/ogg", "web", "{}", idempotencyKey = null) }
+        assertEquals("without a key the upload is not repeated by the client", 3, server.requests.count { it.url.endsWith("/api/voice/v1/audio-jobs") })
+        assertFalse(verdicts.contains("refused"))
+    }
+
+    @Test
+    fun `only Life OS's sign-in codes mean pair again`() {
+        connection = Connection(server.publicUrl, token, DeviceKey.parse("lo_dev_" + "e".repeat(64)))
+        val transport = FakeTransport()
+            .json(401, """{"error":{"code":"sign_in_required","message":"Sign in first"}}""")
+            .json(401, """{"error":{"code":"some_new_code","message":"Something else"}}""")
+        assertTrue(expect<LifeOsException.SignInRequired> { client(transport).openTasksDueBefore(Instant.EPOCH) }.keySent)
+        val other = expect<LifeOsException.Api> { client(transport).openTasksDueBefore(Instant.EPOCH) }
+        assertEquals(401, other.status)
+        assertEquals("some_new_code", other.code)
+        assertEquals("only the sign-in code", listOf("refused"), verdicts)
+    }
+
+    @Test
+    fun `Life OS's coded 403s are refusals with a clear message, neither Access nor the key`() {
+        connection = Connection(server.publicUrl, token, DeviceKey.parse("lo_dev_" + "f".repeat(64)))
+        val transport = FakeTransport()
+            .json(403, """{"error":{"code":"credential_not_allowed","message":"This credential cannot use this route"}}""")
+            .json(403, """{"error":{"code":"insufficient_scope","message":"The token's scopes do not cover this module"}}""")
+            .json(403, """{"error":{"code":"forbidden_path","message":"This path is not allowed"}}""")
+        val credential = expect<LifeOsException.Api> { client(transport).openTasksDueBefore(Instant.EPOCH) }
+        assertEquals("credential_not_allowed", credential.code)
+        assertEquals("This credential cannot use this route. This is a bug in the app: please report it.", credential.detail)
+        assertFalse(credential.authProblem)
+        val scope = expect<LifeOsException.Api> { client(transport).openTasksDueBefore(Instant.EPOCH) }
+        assertEquals("insufficient_scope", scope.code)
+        assertEquals("The token's scopes do not cover this module", scope.detail)
+        val path = expect<LifeOsException.Api> { client(transport).openTasksDueBefore(Instant.EPOCH) }
+        assertEquals("forbidden_path", path.code)
+        assertTrue(path.detail.endsWith("This is a bug in the app: please report it."))
+        assertEquals("none retried", 3, transport.requests.size)
+        assertTrue("never the key's fault", verdicts.isEmpty())
+    }
+
+    @Test
+    fun `a device key on MCP is refused as credential_not_allowed by the contract's server`() = runBlocking {
+        val key = pairNow()
+        val response = client().relay("GET", "/api/mcp/mcp", emptyMap(), null, 1_000, watchKey = key)
+        assertEquals(403, response.status)
+        val error = expect<LifeOsException.Api> { LifeOsClient.checked(response, keySent = true, url = server.requests.last().url) }
+        assertEquals("credential_not_allowed", error.code)
     }
 
     @Test

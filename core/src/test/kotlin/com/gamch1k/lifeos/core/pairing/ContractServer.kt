@@ -42,6 +42,9 @@ class ContractServer(
     /** Modules the account may not use (403 module_not_allowed), by route segment, such as "voice". */
     val notAllowed = mutableSetOf<String>()
 
+    /** How many of the next service requests get there too late (a slow upload): 401 identity_expired from the service. */
+    var identityExpiring = 0
+
     /** Makes a pairing code as Settings → Devices does; with [challenge] as the Custom Tab page does. */
     fun issueCode(challenge: String? = null): String {
         val alphabet = PairingCode.ALPHABET
@@ -70,11 +73,19 @@ class ContractServer(
         return when {
             request.method == "POST" && path == "/api/auth/devices/pair" -> pair(body)
             path.startsWith("/api/auth/devices/") -> withKey(request) { key -> devices(request.method, path, key, body) }
+            // A device key never reaches MCP.
+            path.startsWith("/api/mcp/") -> withKey(request) { error(403, "credential_not_allowed", "This credential cannot use this route") }
             path.startsWith("/api/") -> {
                 val module = path.removePrefix("/api/").substringBefore('/')
                 withKey(request, allowLegacy = true) {
-                    if (module in notAllowed) error(403, "module_not_allowed", "Your account may not use this module")
-                    else json(200, if (module == "voice") """{"id":"job-1","status":"queued"}""" else """{"items":[]}""")
+                    when {
+                        identityExpiring > 0 -> {
+                            identityExpiring--
+                            error(401, "identity_expired", "The identity token expired before the service read it")
+                        }
+                        module in notAllowed -> error(403, "module_not_allowed", "Your account may not use this module")
+                        else -> json(200, if (module == "voice") """{"id":"job-1","status":"queued"}""" else """{"items":[]}""")
+                    }
                 }
             }
             else -> json(404, """{"error":{"code":"not_found","message":"not found"}}""")

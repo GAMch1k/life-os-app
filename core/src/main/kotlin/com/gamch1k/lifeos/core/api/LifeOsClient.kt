@@ -69,12 +69,15 @@ interface DeviceKeyListener {
  * with a redirect to its login page, which becomes
  * [LifeOsException.AccessRedirect].
  *
- * A 401 from Life OS itself (its JSON error) is
+ * Life OS's own refusals ([checked], life-os docs/api/devices.md, "When a
+ * request is refused"): a 401 with a sign-in code ([SIGN_IN_CODES]) is
  * [LifeOsException.SignInRequired], told to [keyListener] when a key was
- * sent; only a very slow idempotent upload, whose identity token may have run
- * out on the way, is tried once more first. A 403 `module_not_allowed` is
- * [LifeOsException.ModuleNotAllowed]. Any other 401 or 403 (Cloudflare's)
- * stays [LifeOsException.Unauthorized].
+ * sent; a 401 `identity_expired` (a service got the identity token too late)
+ * is [LifeOsException.IdentityExpired], sent once more when idempotent and
+ * never held against the key; a 403 `module_not_allowed` is
+ * [LifeOsException.ModuleNotAllowed]; other coded 401s and 403s are
+ * refusals ([LifeOsException.Api]). Cloudflare's 401 and 403, and the
+ * gateway's plain 403 `forbidden`, stay [LifeOsException.Unauthorized].
  *
  * Idempotent calls (reads, completing a Task, an Inbox capture with its
  * dedupe key, content-addressed media, a voice upload with its
@@ -96,8 +99,6 @@ class LifeOsClient(
     private val retryDelaysMillis: List<Long> = listOf(700, 2_500),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val keyListener: DeviceKeyListener? = null,
-    /** A monotonic clock in milliseconds, for the slow upload's second try. */
-    private val clockMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     // ---- Tasks
 
@@ -531,9 +532,8 @@ class LifeOsClient(
         key: DeviceKey? = null,
     ): HttpResponse {
         var attempt = 0
-        var slowRetried = false
+        var identityRetried = false
         while (true) {
-            val started = clockMillis()
             val failure = try {
                 val response = transport.execute(request, sink, onProgress)
                 val result = if (redirects && response.status in 300..399) response else checked(response, keySent = key != null, url = request.url)
@@ -548,13 +548,17 @@ class LifeOsClient(
             } catch (error: java.io.IOException) {
                 LifeOsException.Local(error.message ?: error.javaClass.simpleName, error)
             }
-            if (failure is LifeOsException.SignInRequired && key != null) {
+            if (failure is LifeOsException.IdentityExpired) {
                 // The gateway checked the key when the headers arrived; the identity token it gave the
-                // service lasts at least 4 minutes. A slower upload can see the service's 401: once more.
-                if (idempotent && !slowRetried && clockMillis() - started >= SLOW_REQUEST_MILLIS) {
-                    slowRetried = true
+                // service lasts at least 4 minutes, and a slower upload outlived it. Never the key's
+                // fault: once more at once (the gateway checks again), else later like any failure.
+                if (idempotent && !identityRetried) {
+                    identityRetried = true
                     continue
                 }
+                throw failure
+            }
+            if (failure is LifeOsException.SignInRequired && key != null) {
                 keyListener?.refused(key)
                 throw failure
             }
@@ -584,13 +588,6 @@ class LifeOsClient(
         const val CHILD_PATH = "/api/auth/devices/child"
         const val ME_PATH = "/api/auth/devices/me"
         const val SIGN_OUT_PATH = "/api/auth/devices/sign-out"
-
-        /**
-         * A request that ran this long before Life OS answered 401 may have
-         * outlived the identity token the gateway gave the service (at least
-         * 4 minutes from the headers): it is tried once more.
-         */
-        const val SLOW_REQUEST_MILLIS = 3 * 60_000L
 
         /** An upload gets 30 s plus a second for every 32 KiB, at most 10 minutes. */
         fun uploadTimeout(bytes: Long): Long = (DEFAULT_TIMEOUT_MILLIS + bytes / 32).coerceAtMost(10 * 60_000L)
@@ -625,13 +622,15 @@ class LifeOsClient(
             val message = envelope?.error?.message?.takeIf { it.isNotBlank() }
             if (status == 401 || status == 403) {
                 when {
-                    // Life OS's own 401 always carries its JSON error; Cloudflare's never does.
-                    status == 401 && code != null -> throw LifeOsException.SignInRequired(keySent)
+                    // Life OS's own 401s and 403s always carry its JSON error; Cloudflare's never do.
+                    status == 401 && code == IDENTITY_EXPIRED -> throw LifeOsException.IdentityExpired()
+                    status == 401 && code != null && code in SIGN_IN_CODES -> throw LifeOsException.SignInRequired(keySent)
                     status == 403 && code == MODULE_NOT_ALLOWED -> throw LifeOsException.ModuleNotAllowed(url?.let(::moduleOf))
-                    // admin_only, not_a_phone_key, insufficient_scope…: a refusal, not a sign-in problem.
                     // The gateway's plain "forbidden" is what it answers tunnel traffic without Access's token.
-                    status == 403 && code != null && code != "forbidden" ->
-                        throw LifeOsException.Api(status, code, message ?: defaultMessage(status))
+                    status == 403 && code == FORBIDDEN -> throw LifeOsException.Unauthorized(status)
+                    // credential_not_allowed, insufficient_scope, forbidden_path, admin_only, another 401…:
+                    // Life OS refused the request itself, neither the key nor Access.
+                    code != null -> throw LifeOsException.Api(status, code, refusal(code, message ?: defaultMessage(status)))
                     else -> throw LifeOsException.Unauthorized(status)
                 }
             }
@@ -644,6 +643,17 @@ class LifeOsClient(
 
         const val MODULE_NOT_ALLOWED = "module_not_allowed"
         const val UNAUTHENTICATED = "unauthenticated"
+        const val IDENTITY_EXPIRED = "identity_expired"
+        const val FORBIDDEN = "forbidden"
+
+        /** The 401 codes that mean the credential does not work (or none was sent): pair (again). */
+        val SIGN_IN_CODES = setOf(UNAUTHENTICATED, "sign_in_required")
+
+        /** Refusals the app causes only by a bug (a route or path it never uses): said so. */
+        private val APP_BUG_CODES = setOf("credential_not_allowed", "forbidden_path", "forbidden_origin")
+
+        private fun refusal(code: String, message: String): String =
+            if (code in APP_BUG_CODES) "$message. This is a bug in the app: please report it." else message
 
         /** The `code` of a Life OS error body (`{"error":{"code","message"}}`), or null. */
         fun errorCode(body: ByteArray): String? {

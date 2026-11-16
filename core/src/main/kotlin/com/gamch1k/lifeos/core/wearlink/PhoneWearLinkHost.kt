@@ -57,7 +57,8 @@ fun LifeOsClient.asWearRelay(keys: WatchKeys): WearRelay = WearRelay { request -
     }
     if (watchKey != null) {
         when {
-            response.status == 401 && LifeOsClient.errorCode(response.body) != null -> keys.refused(watchKey)
+            // Only a sign-in code means the key stopped working; identity_expired (a slow upload) never does.
+            response.status == 401 && LifeOsClient.errorCode(response.body)?.let { it in LifeOsClient.SIGN_IN_CODES } == true -> keys.refused(watchKey)
             response.status in 200..299 -> keys.accepted(watchKey)
         }
     }

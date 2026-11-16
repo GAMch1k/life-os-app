@@ -189,6 +189,19 @@ class CaptureSenderTest {
     }
 
     @Test
+    fun `a voice note whose upload outlived its identity token stays queued and goes again with the same key`() = runBlocking {
+        setUp()
+        store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
+        api.failures += LifeOsException.IdentityExpired()
+        assertTrue(sender.send("c-voice") is SendOutcome.Retry)
+        val waiting = store.get("c-voice")!!
+        assertEquals(CaptureStatus.PENDING, waiting.status)
+        assertFalse("not a sign-in problem", waiting.authProblem)
+        assertEquals(SendOutcome.Sent, sender.send("c-voice"))
+        assertEquals(listOf("c-voice", "c-voice"), api.audioAttempts.map { it.third })
+    }
+
+    @Test
     fun `a module the account may not use fails with a clear message, not as a sign-in problem`() = runBlocking {
         setUp()
         store.add(capture(CaptureKind.VOICE, files = listOf(stores.newFile("voice.ogg"))))
