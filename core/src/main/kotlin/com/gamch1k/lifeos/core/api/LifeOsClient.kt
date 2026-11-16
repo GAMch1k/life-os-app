@@ -1,6 +1,7 @@
 package com.gamch1k.lifeos.core.api
 
 import com.gamch1k.lifeos.core.config.LifeOsEndpoints
+import com.gamch1k.lifeos.core.secrets.DeviceKey
 import com.gamch1k.lifeos.core.secrets.ServiceToken
 import com.gamch1k.lifeos.core.update.FetchedManifest
 import com.gamch1k.lifeos.core.update.GitHubReleases
@@ -17,19 +18,66 @@ import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
 
-/** Where Life OS is and how to get past Cloudflare Access. */
-class Connection(val baseUrl: String, val token: ServiceToken) {
+/**
+ * Where Life OS is, and the phone's credentials there: its device key once
+ * it is paired with an account (P21-06, life-os `docs/api/devices.md`), and
+ * the Cloudflare Access service token when the server is behind Access. At
+ * least one of the two is set.
+ */
+class Connection(val baseUrl: String, val token: ServiceToken?, val deviceKey: DeviceKey? = null) {
     override fun toString() = "Connection($baseUrl, …)"
+
+    /**
+     * The headers every native call carries (docs/api/devices.md, "Headers
+     * on every native call"): `Authorization: Bearer <device key>` once
+     * paired, Access's `CF-Access-Client-*` when there is a service token,
+     * and `X-Life-OS-Actor: user` only without a key (with one, Life OS
+     * ignores it: a device key acts as the account's user).
+     */
+    fun authHeaders(): Map<String, String> = buildMap {
+        deviceKey?.let { put("Authorization", it.bearer) }
+        token?.let {
+            put("CF-Access-Client-Id", it.clientId)
+            put("CF-Access-Client-Secret", it.clientSecret)
+        }
+        if (deviceKey == null) put(ACTOR_HEADER, ACTOR)
+    }
+
+    companion object {
+        const val ACTOR_HEADER = "X-Life-OS-Actor"
+        const val ACTOR = "user"
+    }
+}
+
+/**
+ * What Life OS said about the device key the client sent: [refused] on its
+ * 401, [accepted] on any success. The token store keeps the verdict, so the
+ * app can say "This phone is no longer connected" and offer pairing again.
+ */
+interface DeviceKeyListener {
+    suspend fun refused(key: DeviceKey)
+    suspend fun accepted(key: DeviceKey)
 }
 
 /**
  * The app's Life OS API client.
  *
- * Every request carries the Cloudflare Access service token
- * (`CF-Access-Client-Id`, `CF-Access-Client-Secret`) and
- * `X-Life-OS-Actor: user`, so the app acts as the owner. Redirects are never
- * followed: Access answers a request it does not let in with a redirect to
- * its login page, which becomes [LifeOsException.AccessRedirect].
+ * Every request carries [Connection.authHeaders]: the device key once the
+ * phone is paired (`Authorization: Bearer`), the Cloudflare Access service
+ * token when there is one, and `X-Life-OS-Actor: user` only without a key.
+ * Redirects are never followed: Access answers a request it does not let in
+ * with a redirect to its login page, which becomes
+ * [LifeOsException.AccessRedirect].
+ *
+ * Life OS's own refusals ([checked], life-os docs/api/devices.md, "When a
+ * request is refused"): a 401 with a sign-in code ([SIGN_IN_CODES]) is
+ * [LifeOsException.SignInRequired], told to [keyListener] when a key was
+ * sent; a 401 `identity_expired` (a service got the identity token too late)
+ * is [LifeOsException.IdentityExpired], sent once more when idempotent and
+ * never held against the key; a 403 `module_not_allowed` is
+ * [LifeOsException.ModuleNotAllowed]; other coded 401s and 403s are
+ * refusals ([LifeOsException.Api]). Cloudflare's 401 and 403, and the
+ * gateway's plain 403 `forbidden`, stay [LifeOsException.Unauthorized].
  *
  * Idempotent calls (reads, completing a Task, an Inbox capture with its
  * dedupe key, content-addressed media, a voice upload with its
@@ -50,6 +98,7 @@ class LifeOsClient(
     private val updatesRepo: String = LifeOsEndpoints.UPDATES_REPO,
     private val retryDelaysMillis: List<Long> = listOf(700, 2_500),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val keyListener: DeviceKeyListener? = null,
 ) {
     // ---- Tasks
 
@@ -240,19 +289,110 @@ class LifeOsClient(
         }
     }
 
+    // ---- Devices (P21-06, life-os docs/api/devices.md)
+
+    /**
+     * `POST /api/auth/devices/pair` at [server]: redeems a pairing [code]
+     * (with the Custom Tab flow's [verifier]) for this phone's device key,
+     * named [name] in Settings → Devices. No Life OS credential: the code is
+     * one. The service token goes along only when it belongs to [server]
+     * (Cloudflare Access lets the request through). Never retried: a code
+     * works once. A server from before pairing answers 404, which is
+     * [LifeOsException.PairingUnsupported]; a refused code is
+     * [LifeOsException.Api] `pairing_code_invalid` with Life OS's message.
+     */
+    suspend fun pair(server: String, code: String, name: String, verifier: String?): PairedDevice {
+        val current = connection()
+        val token = current?.token?.takeIf { LifeOsEndpoints.sameOrigin(current.baseUrl, server) }
+        val request = HttpRequest(
+            method = "POST",
+            url = url(server, PAIR_PATH, emptyList()),
+            headers = buildMap {
+                token?.let {
+                    put("CF-Access-Client-Id", it.clientId)
+                    put("CF-Access-Client-Secret", it.clientSecret)
+                }
+                put("Accept", "application/json")
+                put("User-Agent", userAgent)
+            },
+            body = jsonBody(PairRequest.serializer(), PairRequest(code, name, verifier)),
+            timeoutMillis = DEFAULT_TIMEOUT_MILLIS,
+        )
+        val response = try {
+            perform(request, idempotent = false, sink = null, onProgress = null)
+        } catch (error: LifeOsException.Api) {
+            if (error.status == 404) throw LifeOsException.PairingUnsupported()
+            throw error
+        }
+        val paired = decode(PAIR_PATH, response, PairedDevice.serializer())
+        if (DeviceKey.parse(paired.key) == null) throw LifeOsException.Protocol("$PAIR_PATH answered without a usable device key")
+        return paired
+    }
+
+    /**
+     * `POST /api/auth/devices/child` with the phone's key: a key of its own
+     * for the phone's watch, named [name]. A phone has at most one: this
+     * revokes the previous one (and its push subscriptions). Not retried.
+     */
+    suspend fun createChildKey(name: String): ChildKey {
+        val child = send("POST", CHILD_PATH, jsonBody(ChildKeyRequest.serializer(), ChildKeyRequest(name)), ChildKey.serializer(), idempotent = false)
+        if (DeviceKey.parse(child.key) == null) throw LifeOsException.Protocol("$CHILD_PATH answered without a usable device key")
+        return child
+    }
+
+    /** `GET /api/auth/devices/me`: who the phone's key is, without touching any data. */
+    suspend fun deviceIdentity(): DeviceIdentity = get(ME_PATH, emptyList(), DeviceIdentity.serializer())
+
+    /**
+     * `POST /api/auth/devices/sign-out` with [key] (the phone's own by
+     * default): Life OS revokes it, a phone's together with its watch's, and
+     * their push subscriptions. A key that no longer works (401) counts as
+     * signed out already. Only ever sent to the phone's own server.
+     */
+    suspend fun signOutDevice(key: DeviceKey? = null) {
+        val target = connection() ?: throw LifeOsException.NotSignedIn()
+        signOutKey(Connection(target.baseUrl, target.token, key ?: target.deviceKey ?: return))
+    }
+
+    /**
+     * `POST /api/auth/devices/sign-out` with [target]'s key, at its server,
+     * through Access with its service token: also after the phone forgot
+     * them (a queued revocation). A key that no longer works counts as
+     * signed out already.
+     */
+    suspend fun signOutKey(target: Connection) {
+        if (target.deviceKey == null) return
+        try {
+            exchange("POST", SIGN_OUT_PATH, emptyList(), null, idempotent = true, candidate = target)
+        } catch (_: LifeOsException.SignInRequired) {
+            // Revoked already.
+        }
+    }
+
     // ---- Relay (the watch's requests through the phone)
 
     /**
      * Sends a request on behalf of another client, the watch (docs/wear.md):
      * [pathAndQuery] as given (already encoded), [headers] as given, the
-     * service token added, redirects not followed, and every HTTP answer
-     * returned as it is, whatever its status. Throws
-     * [LifeOsException.NotSignedIn] without a token, and [LifeOsException.Offline],
-     * [LifeOsException.Timeout] or [LifeOsException.Local] when no answer came.
-     * Never retried: the caller decides.
+     * phone's service token added when there is one, and [watchKey], the
+     * watch's own device key, as `Authorization: Bearer` (without a key, the
+     * service token alone, as before pairing). Redirects are not followed,
+     * and every HTTP answer is returned as it is, whatever its status. Throws
+     * [LifeOsException.NotSignedIn] without any credential, and
+     * [LifeOsException.Offline], [LifeOsException.Timeout] or
+     * [LifeOsException.Local] when no answer came. Never retried: the caller
+     * decides.
      */
-    suspend fun relay(method: String, pathAndQuery: String, headers: Map<String, String>, body: ByteArray?, timeoutMillis: Long): HttpResponse {
+    suspend fun relay(
+        method: String,
+        pathAndQuery: String,
+        headers: Map<String, String>,
+        body: ByteArray?,
+        timeoutMillis: Long,
+        watchKey: DeviceKey? = null,
+    ): HttpResponse {
         val target = connection() ?: throw LifeOsException.NotSignedIn()
+        if (target.token == null && watchKey == null) throw LifeOsException.NotSignedIn()
         require(pathAndQuery.startsWith("/")) { "the path must start with /" }
         val contentType = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value
         val request = HttpRequest(
@@ -261,11 +401,17 @@ class LifeOsClient(
             headers = buildMap {
                 put("User-Agent", userAgent)
                 headers.forEach { (name, value) ->
-                    // The body carries its own Content-Type; the token is always the phone's.
-                    if (!name.equals("Content-Type", ignoreCase = true) && !name.startsWith("CF-Access-", ignoreCase = true)) put(name, value)
+                    // The body carries its own Content-Type; the credentials are always the phone's to set.
+                    val credential = name.startsWith("CF-Access-", ignoreCase = true) || name.equals("Authorization", ignoreCase = true)
+                    // With a key, Life OS ignores the actor: the key acts as the account's user.
+                    val actor = watchKey != null && name.equals(Connection.ACTOR_HEADER, ignoreCase = true)
+                    if (!name.equals("Content-Type", ignoreCase = true) && !credential && !actor) put(name, value)
                 }
-                put("CF-Access-Client-Id", target.token.clientId)
-                put("CF-Access-Client-Secret", target.token.clientSecret)
+                target.token?.let {
+                    put("CF-Access-Client-Id", it.clientId)
+                    put("CF-Access-Client-Secret", it.clientSecret)
+                }
+                watchKey?.let { put("Authorization", it.bearer) }
             },
             body = body?.let { RequestBody.Bytes(contentType ?: "application/octet-stream", it) },
             timeoutMillis = timeoutMillis,
@@ -312,16 +458,13 @@ class LifeOsClient(
     ): HttpResponse {
         val target = candidate ?: connection() ?: throw LifeOsException.NotSignedIn()
         val base = if (update) updatesUrl else target.baseUrl
-        val withToken = !update || LifeOsEndpoints.sameOrigin(target.baseUrl, updatesUrl)
+        // Credentials belong to their server: the update origin gets them only when it is that server.
+        val withCredentials = !update || LifeOsEndpoints.sameOrigin(target.baseUrl, updatesUrl)
         val request = HttpRequest(
             method = method,
             url = url(base, path, query),
             headers = buildMap {
-                if (withToken) {
-                    put("CF-Access-Client-Id", target.token.clientId)
-                    put("CF-Access-Client-Secret", target.token.clientSecret)
-                    put("X-Life-OS-Actor", "user")
-                }
+                if (withCredentials) putAll(target.authHeaders())
                 put("Accept", accept)
                 put("User-Agent", userAgent)
                 putAll(extraHeaders)
@@ -329,7 +472,7 @@ class LifeOsClient(
             body = body,
             timeoutMillis = timeoutMillis,
         )
-        return perform(request, idempotent, sink, onProgress)
+        return perform(request, idempotent, sink, onProgress, key = target.deviceKey.takeIf { withCredentials })
     }
 
     /**
@@ -377,6 +520,8 @@ class LifeOsClient(
      * Sends [request], retrying an [idempotent] one on errors that may pass,
      * and turns an answer that is not a success into a [LifeOsException]; a
      * 3xx is returned as it is when [redirects] (the caller follows it).
+     * [key] is the device key the request carries, if any: Life OS's verdict
+     * on it goes to [keyListener].
      */
     private suspend fun perform(
         request: HttpRequest,
@@ -384,12 +529,16 @@ class LifeOsClient(
         sink: ResponseSink?,
         onProgress: ((Long) -> Unit)?,
         redirects: Boolean = false,
+        key: DeviceKey? = null,
     ): HttpResponse {
         var attempt = 0
+        var identityRetried = false
         while (true) {
             val failure = try {
                 val response = transport.execute(request, sink, onProgress)
-                return if (redirects && response.status in 300..399) response else checked(response)
+                val result = if (redirects && response.status in 300..399) response else checked(response, keySent = key != null, url = request.url)
+                if (key != null && result.status in 200..299) keyListener?.accepted(key)
+                return result
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: LifeOsException) {
@@ -398,6 +547,20 @@ class LifeOsClient(
                 mapTransport(error)
             } catch (error: java.io.IOException) {
                 LifeOsException.Local(error.message ?: error.javaClass.simpleName, error)
+            }
+            if (failure is LifeOsException.IdentityExpired) {
+                // The gateway checked the key when the headers arrived; the identity token it gave the
+                // service lasts at least 4 minutes, and a slower upload outlived it. Never the key's
+                // fault: once more at once (the gateway checks again), else later like any failure.
+                if (idempotent && !identityRetried) {
+                    identityRetried = true
+                    continue
+                }
+                throw failure
+            }
+            if (failure is LifeOsException.SignInRequired && key != null) {
+                keyListener?.refused(key)
+                throw failure
             }
             if (!idempotent || !failure.retryable || attempt >= retryDelaysMillis.size) throw failure
             sleep(retryDelaysMillis[attempt++])
@@ -421,6 +584,11 @@ class LifeOsClient(
         /** One APK download, from the first byte to the last. */
         const val DOWNLOAD_TIMEOUT_MILLIS = 15 * 60_000L
 
+        const val PAIR_PATH = "/api/auth/devices/pair"
+        const val CHILD_PATH = "/api/auth/devices/child"
+        const val ME_PATH = "/api/auth/devices/me"
+        const val SIGN_OUT_PATH = "/api/auth/devices/sign-out"
+
         /** An upload gets 30 s plus a second for every 32 KiB, at most 10 minutes. */
         fun uploadTimeout(bytes: Long): Long = (DEFAULT_TIMEOUT_MILLIS + bytes / 32).coerceAtMost(10 * 60_000L)
 
@@ -435,8 +603,13 @@ class LifeOsClient(
             return if (encoded.isEmpty()) "$base$path" else "$base$path?$encoded"
         }
 
-        /** Turns an HTTP answer that is not a success into the matching [LifeOsException]. */
-        fun checked(response: HttpResponse): HttpResponse {
+        /**
+         * Turns an HTTP answer that is not a success into the matching
+         * [LifeOsException] (life-os docs/api/devices.md, "When a request is
+         * refused"). [keySent]: the request carried a device key. [url]
+         * names the module a 403 `module_not_allowed` is about.
+         */
+        fun checked(response: HttpResponse, keySent: Boolean = false, url: String? = null): HttpResponse {
             val status = response.status
             if (status in 200..299) return response
             if (status in 300..399) {
@@ -444,14 +617,71 @@ class LifeOsClient(
                 if (host == "cloudflareaccess.com" || host.endsWith(".cloudflareaccess.com")) throw LifeOsException.AccessRedirect(host)
                 throw LifeOsException.Protocol("a redirect ($status) to $host")
             }
-            if (status == 401 || status == 403) throw LifeOsException.Unauthorized(status)
             val envelope = errorEnvelope(response)
             val code = envelope?.error?.code?.takeIf { it.isNotBlank() }
             val message = envelope?.error?.message?.takeIf { it.isNotBlank() }
+            if (status == 401 || status == 403) {
+                when {
+                    // Life OS's own 401s and 403s always carry its JSON error; Cloudflare's never do.
+                    status == 401 && code == IDENTITY_EXPIRED -> throw LifeOsException.IdentityExpired()
+                    status == 401 && code != null && code in SIGN_IN_CODES -> throw LifeOsException.SignInRequired(keySent)
+                    status == 403 && code == MODULE_NOT_ALLOWED -> throw LifeOsException.ModuleNotAllowed(url?.let(::moduleOf))
+                    // The gateway's plain "forbidden" is what it answers tunnel traffic without Access's token.
+                    status == 403 && code == FORBIDDEN -> throw LifeOsException.Unauthorized(status)
+                    // credential_not_allowed, insufficient_scope, forbidden_path, admin_only, another 401…:
+                    // Life OS refused the request itself, neither the key nor Access.
+                    code != null -> throw LifeOsException.Api(status, code, refusal(code, message ?: defaultMessage(status)))
+                    else -> throw LifeOsException.Unauthorized(status)
+                }
+            }
             if (status in 400..499) {
-                throw LifeOsException.Api(status, code ?: "http_$status", message ?: defaultMessage(status))
+                val retryAfter = if (status == 429) response.header("retry-after")?.trim()?.toLongOrNull() else null
+                throw LifeOsException.Api(status, code ?: "http_$status", message ?: defaultMessage(status), retryAfter)
             }
             throw LifeOsException.Server(status, code, message ?: defaultMessage(status))
+        }
+
+        const val MODULE_NOT_ALLOWED = "module_not_allowed"
+        const val UNAUTHENTICATED = "unauthenticated"
+        const val IDENTITY_EXPIRED = "identity_expired"
+        const val FORBIDDEN = "forbidden"
+
+        /** The 401 codes that mean the credential does not work (or none was sent): pair (again). */
+        val SIGN_IN_CODES = setOf(UNAUTHENTICATED, "sign_in_required")
+
+        /** Refusals the app causes only by a bug (a route or path it never uses): said so. */
+        private val APP_BUG_CODES = setOf("credential_not_allowed", "forbidden_path", "forbidden_origin")
+
+        private fun refusal(code: String, message: String): String =
+            if (code in APP_BUG_CODES) "$message. This is a bug in the app: please report it." else message
+
+        /** The `code` of a Life OS error body (`{"error":{"code","message"}}`), or null. */
+        fun errorCode(body: ByteArray): String? {
+            if (body.isEmpty() || body.size > 64 * 1024) return null
+            return try {
+                LifeOsJson.decodeFromString(ErrorEnvelope.serializer(), body.toString(Charsets.UTF_8)).error?.code?.takeIf { it.isNotBlank() }
+            } catch (_: SerializationException) {
+                null
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
+
+        /** The module an API address belongs to, as the app names it ("Voice notes"), or null. */
+        fun moduleOf(url: String): String? {
+            val path = runCatching { URI(url).rawPath }.getOrNull() ?: url
+            val segment = path.removePrefix("/api/").substringBefore('/')
+            return when (segment) {
+                "tasks" -> "Tasks"
+                "calendar" -> "Calendar"
+                "inbox" -> "Inbox"
+                "voice" -> "Voice notes"
+                "notifications" -> "Notifications"
+                "food" -> "Food"
+                "finance" -> "Finance"
+                "activity" -> "the Event Log"
+                else -> null
+            }
         }
 
         private fun errorEnvelope(response: HttpResponse): ErrorEnvelope? {

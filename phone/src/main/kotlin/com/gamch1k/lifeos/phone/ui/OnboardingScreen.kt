@@ -70,7 +70,9 @@ data class OnboardingState(
 /**
  * P18-03: the server address and the Cloudflare Access service token, at the
  * first run and from Settings › Edit connection. Another server needs its own
- * token; the watch follows the saved server.
+ * token; the watch follows the saved server. Since P21-06 it also leads to
+ * pairing with an account ([Screen.Pair]); a server without Access needs no
+ * token at all.
  */
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application.graph
@@ -99,13 +101,28 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         return url to token
     }
 
-    /** Tests the connection; [onPassed] runs after a passed test (the screen saves then). */
-    fun test(onPassed: (() -> Unit)? = null) {
+    /** The server to pair with: the typed one, or null (with a message) when it is not an https address. */
+    fun pairingServer(): String? {
+        val url = ServerUrl.normalize(state.value.server)
+        if (url == null) state.update { it.copy(message = "The server must be an https:// address, such as ${ServerUrl.DEFAULT}.", messageIsError = true) }
+        return url
+    }
+
+    /**
+     * Tests the connection; [onPassed] runs after a passed test (the screen
+     * saves then). [onNeedsPairing] runs when Access let the token through
+     * but Life OS wants a sign-in (legacy access is off): the token is right,
+     * and pairing comes next, which needs the token saved first.
+     */
+    fun test(onPassed: (() -> Unit)? = null, onNeedsPairing: (() -> Unit)? = null) {
         val (url, token) = parsed() ?: return
         state.update { it.copy(testing = true, message = null) }
         viewModelScope.launch {
             try {
-                graph.client.testConnection(Connection(url, token))
+                // A paired phone tests with its key as well: once legacy access is off, the token alone gets 401.
+                val current = graph.tokens.current()
+                val key = current?.deviceKey?.takeIf { current.baseUrl == url }
+                graph.client.testConnection(Connection(url, token, key))
                 state.update {
                     it.copy(
                         testing = false,
@@ -117,6 +134,17 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                 onPassed?.invoke()
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (error: LifeOsException.SignInRequired) {
+                // Life OS's own 401: Cloudflare Access let the token through.
+                state.update {
+                    it.copy(
+                        testing = false,
+                        tested = Triple(url, token.clientId, token.clientSecret),
+                        message = "Cloudflare Access let the phone through. Life OS asks for a sign-in: pair this phone next.",
+                        messageIsError = false,
+                    )
+                }
+                onNeedsPairing?.invoke()
             } catch (error: LifeOsException) {
                 val hint = if (!token.clientId.endsWith(".access") && error.authProblem) " The Client ID normally ends in .access." else ""
                 state.update {
@@ -131,6 +159,8 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         state.update { it.copy(saving = true) }
         viewModelScope.launch {
             val previous = graph.tokens.serverUrl()
+            // A device key belongs to its server: another server unpairs the phone (Life OS signs the key out).
+            if (previous != url) graph.leavePairing()
             graph.tokens.save(url, token)
             if (previous != url) graph.today.clear()
             // The watch, the push subscription and captures that failed on a bad token.
@@ -172,9 +202,12 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 Spacer(Modifier.size(24.dp))
                 Text("Connect to Life OS", style = MaterialTheme.typography.headlineMedium)
             }
+            // After signing out: a key Life OS has not confirmed signing out yet.
+            RevokeNotice()
             Text(
-                "The app reaches Life OS through Cloudflare Access with a service token made for this phone. " +
-                    "It is stored encrypted with the Android Keystore and sent only to your server.",
+                "The app signs in to Life OS with a key of its own, which it gets when you pair it with your account. " +
+                    "A Life OS behind Cloudflare Access (the official server is) also needs a service token made for this phone: " +
+                    "connect with it below first, then pair. Both are stored encrypted with the Android Keystore and sent only to your server.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
@@ -186,6 +219,17 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )
+            SectionCard("Pair with your account") {
+                Text(
+                    "With a QR code from Life OS (Settings → Devices), or by signing in on this phone. " +
+                        "Without Cloudflare Access in front, this is all the app needs.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(onClick = { viewModel.pairingServer()?.let { navigator.go(Screen.Pair(server = it)) } }, enabled = !state.testing && !state.saving) {
+                    Text("Pair this phone")
+                }
+            }
+            Text("Cloudflare Access service token", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = state.clientId,
                 onValueChange = { viewModel.edit(clientId = it) },
@@ -210,7 +254,17 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 // A passed test saves and continues by itself; the second button
                 // stays for saving after a test that failed only for being offline.
                 Button(
-                    onClick = { viewModel.test(onPassed = { viewModel.save { navigator.reset(Screen.Home) } }) },
+                    onClick = {
+                        viewModel.test(
+                            onPassed = { viewModel.save { navigator.reset(Screen.Home) } },
+                            onNeedsPairing = {
+                                viewModel.save {
+                                    navigator.reset(Screen.Home)
+                                    navigator.go(Screen.Pair())
+                                }
+                            },
+                        )
+                    },
                     enabled = !state.testing && !state.saving,
                 ) { Text("Connect") }
                 if (testedCurrent || state.canSaveUntested) {

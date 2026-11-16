@@ -16,19 +16,26 @@ import com.gamch1k.lifeos.core.api.HttpResponse
 import com.gamch1k.lifeos.core.api.HttpTransport
 import com.gamch1k.lifeos.core.api.LifeOsClient
 import com.gamch1k.lifeos.core.api.LifeOsJson
+import com.gamch1k.lifeos.core.api.PairedDevice
 import com.gamch1k.lifeos.core.api.ResponseSink
 import com.gamch1k.lifeos.core.capture.CaptureSender
 import com.gamch1k.lifeos.core.capture.CaptureStatusChecker
 import com.gamch1k.lifeos.core.capture.CaptureStore
 import com.gamch1k.lifeos.core.capture.asCaptureApi
+import com.gamch1k.lifeos.core.api.Connection
+import com.gamch1k.lifeos.core.pairing.KeyRevoker
+import com.gamch1k.lifeos.core.pairing.WatchKeys
 import com.gamch1k.lifeos.core.push.SnoozeBook
 import com.gamch1k.lifeos.core.push.Snoozer
 import com.gamch1k.lifeos.core.secrets.KeystoreCipher
 import com.gamch1k.lifeos.core.secrets.TokenStore
 import com.gamch1k.lifeos.core.today.TodaySnapshot
 import com.gamch1k.lifeos.core.wearlink.PhoneWearLinkHost
+import com.gamch1k.lifeos.core.wearlink.WearLink
 import com.gamch1k.lifeos.core.wearlink.WearLinkPhone
+import com.gamch1k.lifeos.core.wearlink.WearNodes
 import com.gamch1k.lifeos.phone.capture.CaptureQueue
+import com.gamch1k.lifeos.phone.pairing.RevokeWorker
 import com.gamch1k.lifeos.phone.push.AndroidSnoozeAlarm
 import com.gamch1k.lifeos.phone.push.LifeOsNotifications
 import com.gamch1k.lifeos.phone.push.PushManager
@@ -39,6 +46,7 @@ import com.gamch1k.lifeos.phone.watch.WatchLink
 import com.gamch1k.lifeos.phone.watch.WatchUpdateManager
 import com.gamch1k.lifeos.phone.watchsetup.AdbIdentity
 import com.gamch1k.lifeos.phone.watchsetup.StoredSetupMemory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +81,8 @@ class AppGraph(private val app: Application) {
         transport = LazyTransport { CronetTransport.create(app) },
         connection = { tokens.current() },
         userAgent = "LifeOS-Android/${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+        // Life OS's verdict on the device key: "no longer connected" until it works again (P21-06).
+        keyListener = tokens,
     )
 
     val captures = CaptureStore(queueData)
@@ -84,8 +94,14 @@ class AppGraph(private val app: Application) {
     /** Today for Home, the widget and the watch; changes reach the watch and the widgets. */
     val today = TodayRepository(client, homeCache, onChanged = ::todayChanged)
 
-    /** The watch link (docs/wear.md): the token store and the relay over this client. */
-    val wearLink = PhoneWearLinkHost(tokens, client)
+    /** Signs keys the phone lets go out of Life OS, now or, queued, when online (P21-06). */
+    val revoker = KeyRevoker(tokens, client)
+
+    /** The watch's own device key, made by this phone once it is paired (P21-06). */
+    val watchKeys = WatchKeys(tokens, client, watchName = ::watchName)
+
+    /** The watch link (docs/wear.md): the watch's credentials, and the relay over this client with the watch's key. */
+    val wearLink = PhoneWearLinkHost(watchKeys, client)
 
     val push = PushManager(app, client, settings, scope)
 
@@ -136,7 +152,7 @@ class AppGraph(private val app: Application) {
         )
     }
 
-    /** A server and token were saved (onboarding, Edit connection, the 0.1 migration). */
+    /** A server and token, or a pairing, were saved (onboarding, Edit connection, pairing, the 0.1 migration). */
     fun tokenSaved() {
         credentialsChanged()
         scope.launch {
@@ -159,15 +175,75 @@ class AppGraph(private val app: Application) {
     }
 
     /**
-     * Sign out: Life OS forgets this phone's push subscription (while the token
-     * still works), then the token, the cached Today, the queue with its
-     * files, snoozed notifications and downloaded updates (the phone's and the
-     * watch's) go; the watch
-     * and the widgets hear of it. The watch's pairing key stays: it is no
-     * Life OS credential, and a later rescue may need it.
+     * A pairing code was redeemed (P21-06): the phone keeps its device key
+     * for [server]. A key it held before signs itself out first (with its
+     * watch's), so Settings → Devices lists no stale phone. Then, as for a
+     * new token: the watch fetches its credentials (and so gets a key of its
+     * own), captures refused for a sign-in go again, and push registers again
+     * so that its subscription belongs to the key.
+     */
+    suspend fun paired(server: String, paired: PairedDevice, deviceName: String, typed: String?) {
+        val before = tokens.current()
+        // Refuses (IllegalStateException) to move a set-up phone to a server the person did not type.
+        tokens.savePairing(server, paired, deviceName, typed = typed)
+        before?.takeIf { it.deviceKey != null }?.let { revoke(it) }
+        if (before?.baseUrl != tokens.serverUrl()) today.clear()
+        tokenSaved()
+    }
+
+    /**
+     * Settings › Account › Unpair this phone: Life OS revokes the key (the
+     * watch's with it, and their push subscriptions), and the phone forgets
+     * both. With a service token the app goes on with it (legacy access);
+     * without one, this is [signOut].
+     */
+    suspend fun unpair() {
+        val connection = tokens.current() ?: return
+        if (connection.token == null) return signOut()
+        leavePairing()
+        // Life OS deleted the key's subscription: register again with the service token alone.
+        push.sync()
+    }
+
+    /** Life OS signs the phone's key out (now, or queued until online), the phone forgets it and the watch's; the watch hears of it. */
+    suspend fun leavePairing() {
+        val connection = tokens.current()?.takeIf { it.deviceKey != null } ?: return
+        revoke(connection)
+        tokens.clearPairing()
+        credentialsChanged()
+    }
+
+    /**
+     * Signs [connection]'s key out of Life OS. When Life OS does not confirm
+     * (offline, a timeout), the key is queued and RevokeWorker tries again
+     * when online; Settings, Home and the first screen say so until it goes
+     * through, or ask the person to sign the phone out on the web.
+     */
+    private suspend fun revoke(connection: Connection) {
+        if (!revoker.revoke(connection)) RevokeWorker.enqueue(app)
+    }
+
+    /** The watch with the Life OS app, by the name Wear OS gives it (such as "Galaxy Watch8 (A1B2)"). */
+    private suspend fun watchName(): String? = try {
+        WearNodes.find(app, WearLink.CAPABILITY_WATCH).firstOrNull()?.displayName
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Sign out: Life OS forgets this phone's push subscription (while the
+     * credentials still work) and, once paired, its device key (the watch's
+     * with it); then the token and the key, the cached Today, the queue with
+     * its files, snoozed notifications and downloaded updates (the phone's
+     * and the watch's) go; the watch and the widgets hear of it. The watch's
+     * ADB pairing key stays: it is no Life OS credential, and a later rescue
+     * may need it.
      */
     suspend fun signOut() {
         push.unregister()
+        tokens.current()?.takeIf { it.deviceKey != null }?.let { revoke(it) }
         tokens.clear()
         today.clear()
         queue.clear()

@@ -44,7 +44,7 @@ object NetworkCheckReport {
         ),
         ReportSection("3. Device", deviceLines(result)),
         ReportSection("3b. DNS HTTPS record via the system resolver", dnsLines(result.dns)),
-        ReportSection("4. Service token request (embedded Cronet)", authLines(result.authenticated)),
+        ReportSection("4. Service token request (embedded Cronet)", authLines(result.authenticated, result.authenticatedWithKey, result.authenticatedWithToken)),
     )
 
     const val HTTP_ENGINE_LABEL = "HttpEngine, Android's own Cronet (extra)"
@@ -164,18 +164,24 @@ object NetworkCheckReport {
         )
     }
 
-    fun authLines(probe: HttpProbeResult?): List<String> {
+    fun authLines(probe: HttpProbeResult?, withKey: Boolean = false, withToken: Boolean = true): List<String> {
         if (probe == null) return listOf("No service token stored, skipped.")
         val meaning = when {
             probe.error != null -> null
+            probe.statusCode == 200 && withKey -> "The device key works" + (if (withToken) ", and Access let the request through to Life OS." else ".")
             probe.statusCode == 200 -> "The service token works: Access let the request through to Life OS."
             probe.statusCode in 300..399 && probe.redirectTo?.contains("cloudflareaccess.com") == true ->
                 "Sent to the Access login: no Service Auth policy accepts this token."
+            probe.statusCode == 401 && withKey -> "Refused (401): Life OS no longer accepts this phone's key (pair it again), or Access refused the token."
             probe.statusCode == 401 -> "Access refused the token: wrong or partial ID/secret, or it expired."
             probe.statusCode == 403 -> "Forbidden: Access or Life OS refused the request."
             else -> null
         }
-        return listOf("Service token: set (values omitted)") + probeLines(probe) + listOfNotNull(meaning)
+        val credentials = listOfNotNull(
+            "Service token: set (values omitted)".takeIf { withToken },
+            "Device key: set (value omitted)".takeIf { withKey },
+        )
+        return credentials + probeLines(probe) + listOfNotNull(meaning)
     }
 
     private fun pathOf(url: String): String = try {

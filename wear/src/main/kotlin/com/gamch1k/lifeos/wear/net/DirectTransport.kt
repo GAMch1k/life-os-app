@@ -22,6 +22,8 @@ import kotlin.coroutines.resume
  * Cronet with Chromium's own DNS resolver, so ECH hides the hostname on
  * networks that block it (docs/network-check.md). The watch's default network
  * is used, which is Wi-Fi or LTE once the phone is out of Bluetooth range.
+ * The request carries the watch's own device key once the phone is paired
+ * (P21-06), and the Access service token when there is one.
  *
  * A small client of its own on purpose: the phone app's HTTP client lives in
  * core and is the phone agent's; this one can be swapped for it later behind
@@ -43,7 +45,7 @@ class DirectTransport(
 
     override suspend fun execute(request: ApiRequest): ApiResult {
         val token = credentials()?.takeIf { it.isComplete }
-            ?: return ApiResult.Unavailable(Unavailability.NO_CREDENTIALS, "no token on the watch")
+            ?: return ApiResult.Unavailable(Unavailability.NO_CREDENTIALS, "no key or token on the watch")
         val engine = engine ?: return ApiResult.Unavailable(Unavailability.NETWORK, "Cronet is not available")
         val url = token.baseUrl.trimEnd('/') + request.path
         val outcome = withTimeoutOrNull(request.timeoutMillis) {
@@ -52,10 +54,9 @@ class DirectTransport(
                 val builder = engine.newUrlRequestBuilder(url, callback, executor)
                     .setHttpMethod(request.method)
                     .disableCache()
-                    .addHeader("CF-Access-Client-Id", token.clientId)
-                    .addHeader("CF-Access-Client-Secret", token.clientSecret)
+                // The watch's key (once paired) and Access's token; the actor on writes only without a key.
+                token.headers(actor = RelayPolicy.isWrite(request.method)).forEach { (name, value) -> builder.addHeader(name, value) }
                 request.headers.forEach { (name, value) -> builder.addHeader(name, value) }
-                if (RelayPolicy.isWrite(request.method)) builder.addHeader(RelayPolicy.ACTOR_HEADER, RelayPolicy.ACTOR)
                 request.body?.let { body ->
                     if (request.headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
                         builder.addHeader("Content-Type", "application/octet-stream")

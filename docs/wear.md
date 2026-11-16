@@ -14,9 +14,10 @@ No AI runs on the watch: it records and uploads, Life OS does the rest.
 | Where | What |
 |---|---|
 | `core/…/wearlink/` | The phone–watch protocol, shared by both apps: paths, frames, the relay policy, the phone's handler, and the interfaces the phone implements. |
-| `phone/…/wearlink/PhoneWearLinkService.kt` | The phone's Data Layer listener: token handoff and relay. |
+| `phone/…/wearlink/PhoneWearLinkService.kt` | The phone's Data Layer listener: credentials handoff and relay. |
+| `core/…/pairing/WatchKeys.kt` | The watch's own device key, made by the paired phone (P21-06). |
 | `wear/…/net/` | How the watch calls Life OS: through the phone first, directly second. |
-| `wear/…/link/` | The watch's end of the Data Layer, and the token store. |
+| `wear/…/link/` | The watch's end of the Data Layer, and the credentials store. |
 | `wear/…/capture/` | Recording and the upload queue. |
 | `wear/…/today/` | Today's events and tasks: fetch, cache, layout rules. |
 | `wear/…/tile/`, `wear/…/complication/` | The Capture and Today tiles; the "Life OS next" and "Life OS capture" complications. |
@@ -30,13 +31,20 @@ Both apps are `com.gamch1k.lifeos` and signed with the same key, so the Data Lay
 
 ### Token handoff
 
-The watch never asks the owner for a token. It asks the phone:
+The watch never asks the owner for a token or a key. It asks the phone:
 
 1. The watch finds the phone by its capability (a nearby, Bluetooth-connected node first) and sends a `MessageClient` request on `/lifeos/credentials`: `{"v":1,"id":"<uuid>"}`.
-2. The phone's listener asks `WearTokenSource.load()` and answers `{"v":1,"id":…,"credentials":{"baseUrl":"https://lifeos.gamch1k.com","clientId":…,"clientSecret":…}}`, or an error `no_credentials`.
+2. The phone's listener asks `WearTokenSource.load()` (`WatchKeys`) and answers `{"v":1,"id":…,"credentials":{"baseUrl":"https://lifeos.gamch1k.com","clientId":…,"clientSecret":…,"deviceKey":"lo_dev_…"}}`, or an error `no_credentials`. `clientId` and `clientSecret` are the phone's Cloudflare Access service token (empty without one); `deviceKey` is the **watch's own device key** once the phone is paired with an account (P21-06, 0.5.0), absent before.
 3. The watch keeps them encrypted with an AES-256-GCM key in its own Android Keystore (`CredentialStore`); only ciphertext reaches SharedPreferences, and backups are off.
 
-The watch asks when it starts without a token, when the phone app comes into reach without one, when Life OS refuses the token (401, 403 or a redirect to the Access login), when the owner taps **Get token from phone**, and when the phone pings `/lifeos/credentials-changed`.
+The watch asks when it starts without credentials, when the phone app comes into reach without them, when Life OS refuses them (401, 403 or a redirect to the Access login), when the owner taps **Get token from phone**, and when the phone pings `/lifeos/credentials-changed` (after a new token, pairing, unpairing, or a new watch key).
+
+**The watch's key** (P21-06; life-os `docs/api/devices.md`, "The watch"). A paired phone makes one child key for its watch, `POST /api/auth/devices/child` with the phone's key, named after the watch's node (such as "Galaxy Watch8 (A1B2)"): the first time the watch asks for its credentials or the phone relays a request for it. The phone keeps it encrypted (`TokenStore`, with the phone key's id it belongs to), hands it over as `deviceKey`, and sends it, never its own key, on every request it relays. So Settings → Devices in the Dashboard lists the watch under its phone with its own last use, and signs either out as expected: signing the phone out signs the watch out too.
+
+- A phone has at most one watch key: making another revokes the previous one. The phone makes one by itself only when it has none for its current key; after that, only **Settings › Watch › Connect the watch** (or **Give the watch a new key**) does, for a reset or replaced watch. A watch key Life OS refused (401 to a relayed request) is noted, and Settings › Watch says so; it is never replaced without that tap, which would undo a sign-out in Settings → Devices. Until then the phone answers the watch's credentials request and its relayed requests with `no_credentials`.
+- Pairing the phone again, unpairing it, signing it out, or changing its server forgets the watch's key; the next request makes a new one for the new phone key.
+- An unpaired phone (the service token alone, legacy access) hands over and relays with the token alone, as before 0.5.0.
+- A watch app from before 0.5.0 ignores `deviceKey`: its direct calls use the service token alone, which works while the server's legacy access is on; its relayed calls carry its key all the same, since the phone adds it. The phone updates the watch app as usual.
 
 Google lists handing a session token from the phone to the watch as a Data Layer use. Messages are encrypted in transit and delivered only to the app with the same package and signature. A request/response message, unlike a DataItem, leaves no copy in the Data Layer's storage.
 
@@ -53,7 +61,7 @@ Why the phone first:
 - When the watch is on Bluetooth, its own internet traffic goes through the phone anyway, only slower. The relay uses the Bluetooth link directly, and the watch's Wi-Fi radio can stay off.
 - An HTTP answer through the phone is final, even an error: the direct path would reach the same server with the same token.
 
-The direct path keeps the watch useful without the phone, on Wi-Fi or LTE, as long as it holds a token.
+The direct path keeps the watch useful without the phone, on Wi-Fi or LTE, as long as it holds a key or a token: it sends its key as `Authorization: Bearer`, the Access token's headers when there is one, and `X-Life-OS-Actor: user` on writes only without a key.
 
 ### The relay protocol
 
@@ -69,14 +77,14 @@ body             header.bodyLength bytes, raw (audio stays binary)
 - `RelayResponse`: the same `v` and `id`, then either `status`, `contentType` and the body, or `error` with a `code` and a `message`.
 - Unknown JSON keys are ignored; another `v` is answered with `unsupported_version`. Headers are at most 16 KB, request bodies at most 26 MiB (Voice's upload limit plus framing), reply bodies at most 1 MiB. A reply to another request id is refused.
 
-`RelayPolicy` lets through only the watch app's own calls: `POST /api/voice/v1/audio-jobs`, `GET /api/voice/v1/audio-jobs/{uuid}`, `GET /api/tasks/v1/tasks`, `POST /api/tasks/v1/tasks/{uuid}/complete` and `GET /api/calendar/v1/events`. The watch can't set the token or the actor; the phone adds `X-Life-OS-Actor: user` to writes.
+`RelayPolicy` lets through only the watch app's own calls: `POST /api/voice/v1/audio-jobs`, `GET /api/voice/v1/audio-jobs/{uuid}`, `GET /api/tasks/v1/tasks`, `POST /api/tasks/v1/tasks/{uuid}/complete` and `GET /api/calendar/v1/events`. The watch can't set a credential or the actor: the phone adds the watch's key (once paired), its service token, and `X-Life-OS-Actor: user` to writes when there is no key (with a key, Life OS acts as the account's user anyway).
 
 | Error code | Meaning | The watch |
 |---|---|---|
 | `bad_request` | Unreadable frame | Gives up (a bug) |
 | `forbidden` | Not allowed by `RelayPolicy` | Gives up (a bug) |
 | `unsupported_version` | The apps speak different protocol versions | Goes direct |
-| `no_credentials` | The phone has no token | Goes direct, if it holds one |
+| `no_credentials` | The phone has no credentials for the watch: no token, or (paired) no usable watch key | Goes direct, if it holds credentials |
 | `relay_unavailable` | The phone app doesn't relay (no `WearRelay` yet) | Goes direct |
 | `upstream_unreachable` | The phone got no HTTP response | Goes direct |
 | `too_large` | The reply doesn't fit a message | Sends the same request through a channel |
@@ -181,13 +189,14 @@ What the phone app (P18-05) sets on each Life OS notification (`phone/…/push/L
 All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements every piece: `LifeOsApp` is the `WearLinkHost` (`core/…/wearlink/PhoneWearLinkHost.kt`), `TokenStore` is the `WearTokenSource`, the relay is `LifeOsClient.relay()`, and the app pings the watch when the token is saved or removed and when Today's data changes (a refresh that found other Tasks or events, a Done, a push about Tasks or events). `PhoneWearLinkHostTest` runs it end to end through the real handler.
 
 1. **`WearLinkHost`**: the phone app's `Application` implements it, so the listener finds the two pieces below. Without it, the listener falls back as described under "The listener's fallback" below.
-2. **`WearTokenSource.load(): WearCredentials?`**, implemented by the phone's token store: the base URL (the phone's saved server, `https://lifeos.gamch1k.com` unless the owner chose another) and the service token the watch should use, or null when there is none. With one Access service token per device (the plan), this is the watch's own token; until then, the phone's.
+2. **`WearTokenSource.load(): WearCredentials?`**, implemented by `WatchKeys` (0.5.0; the token store before): the base URL (the phone's saved server, `https://lifeos.gamch1k.com` unless the owner chose another), the phone's service token if any, and once the phone is paired the watch's own device key ([The watch's key](#token-handoff)); or null when there is nothing for the watch.
 3. **`WearRelay.execute(RelayHttpRequest): RelayHttpResponse`**, implemented with the phone's ECH-capable client:
-   - send `method` to the base URL plus `path`, with `headers` (the actor is already among them on writes), the body, and the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers;
+   - send `method` to the base URL plus `path`, with `headers` (the actor is already among them on writes; dropped when a key goes along), the body, the watch's key as `Authorization: Bearer` once the phone is paired, and the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers when the phone has a service token;
    - don't follow redirects, and return every HTTP response, whatever its status;
-   - throw `WearRelayException(RelayErrorCode.NO_CREDENTIALS)` without a token and `WearRelayException(RelayErrorCode.UPSTREAM_UNREACHABLE)` when no response came (any other exception counts as unreachable too);
+   - throw `WearRelayException(RelayErrorCode.NO_CREDENTIALS)` without credentials for the watch and `WearRelayException(RelayErrorCode.UPSTREAM_UNREACHABLE)` when no response came (any other exception counts as unreachable too);
+   - note Life OS's 401 to the watch's key (Settings › Watch offers a new key), and return that answer to the watch as it is;
    - it runs on a background thread; the watch waits about 30 seconds for small requests and 2 minutes for uploads.
-4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, a Done). Both are no-ops without a watch.
+4. **Pings**: call `WearLinkPhone.notifyCredentialsChanged(context)` after the token, the pairing or the watch's key changes, and `WearLinkPhone.notifyTodayChanged(context)` when tasks or events change (a push arrived, a Done). Both are no-ops without a watch.
 
 **The listener's fallback.** Without a `WearLinkHost` (never the case since 0.3.0) the listener would hand over the phone's token through `ServiceTokenStore` (a read-only view of the token store, which holds the server and token entered at the phone app's first run or under Settings → **Edit connection**) and relay nothing (`WearRelay.UNAVAILABLE`).
 
@@ -197,10 +206,10 @@ The watch app is not in the Play Store, and the owner has no computer at hand. S
 
 Updates come from the phone's **update source** (README, [Servers](../README.md#servers-official-default-your-own-and-updates); `core/…/update/UpdateSource.kt`), for the phone's manifest and APK downloads (`LifeOsClient.updateManifest`, `download`) and the watch's own download (`DirectDownload`) alike, never from another server set in the app:
 
-- while the phone is connected to the **update origin**, the build setting `lifeos.updatesUrl` (by default the official `https://lifeos.gamch1k.com`): `/android/updates` there, with the server's service token;
+- while the phone is connected to the **update origin**, the build setting `lifeos.updatesUrl` (by default the official `https://lifeos.gamch1k.com`): `/android/updates` there, with the server's service token and, once paired, the device key (the phone's for its own downloads, the watch's for the watch's);
 - otherwise (another server, or none yet): the latest **GitHub Release** of `lifeos.updatesRepo` (by default `GAMch1k/life-os-app`, since 0.4.6, P20-06): its `updates.json` and APK assets, with no token, following redirects only to GitHub's own hosts.
 
-A token for another server never leaves for the update origin, and no token goes to GitHub. Each source's manifest may only name its own files.
+A token or key for another server never leaves for the update origin, and no token or key goes to GitHub. Each source's manifest may only name its own files.
 
 ### The one-time setup (the owner)
 
@@ -298,7 +307,7 @@ The wear APK carries embedded Cronet's native code for one ABI only (`ndk.abiFil
 ## Setting up the watch (the owner)
 
 1. **Install** the watch app from the phone: Settings › Watch › **Set up the watch app** ([Install and updates](#install-and-updates)). Updates then come through the phone by themselves. (By hand, with a computer, `adb install -r lifeos-wear-<version>.apk` over Wireless debugging still works, but then "Install unknown apps" must be allowed with `adb shell appops set com.gamch1k.lifeos REQUEST_INSTALL_PACKAGES allow` for silent updates.)
-2. **Token**: the phone app must hold its service token, entered at its first run or under Settings → **Edit connection**; the watch needs none of its own, and uses the phone's server. Open **Life OS** on the watch once; it asks the phone by itself. **Connection** shows "Token: From the phone, <time>"; if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers.
+2. **Credentials**: the phone app must be connected (paired with your account, and with its service token where Cloudflare Access is in front); the watch needs nothing of its own, and uses the phone's server. Open **Life OS** on the watch once; it asks the phone by itself, and a paired phone gives it a key of its own. **Connection** shows "Token: Own key, from the phone, <time>" (paired) or "Token: From the phone, <time>" (the service token alone); if not, tap **Get token from phone**, and **Test connection** to see which way Life OS answers. Settings › Watch on the phone shows the watch's key, and **Connect the watch** gives it a new one.
 3. **Microphone**: the first recording asks for it. After "Don't allow", the recording screen offers **Open settings**.
 4. **Home key**: Settings › Advanced features › Customize buttons (Customize keys on older One UI Watch versions) › Home key › Double press › choose **Capture**. "Capture" is the app's second entry in the app list and opens straight into recording; choosing "Life OS" opens Home instead.
 5. **Tiles**: from the watch face, swipe left to the end of the tiles, tap **+**, and add **Life OS Capture** and/or **Life OS Today**. The Galaxy Wearable app on the phone (Tiles) does the same. After an update a tile may keep its old look until it is shown again; if Today stays empty, swipe away and back.

@@ -1,5 +1,6 @@
 package com.gamch1k.lifeos.core.wearlink
 
+import com.gamch1k.lifeos.core.api.LifeOsClient
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -7,9 +8,10 @@ import kotlinx.serialization.Serializable
  * One Life OS API request the watch asks the phone to run. It travels as the
  * header of a frame ([RelayCodec]); the body, [bodyLength] bytes, follows it.
  *
- * The watch never sends the service token or the actor: the phone adds the
- * `CF-Access-Client-*` headers, and [RelayPolicy] adds `X-Life-OS-Actor: user`
- * to writes.
+ * The watch never sends a credential or the actor: the phone adds the
+ * watch's device key (`Authorization: Bearer`, once the phone is paired) and
+ * the `CF-Access-Client-*` headers, and [RelayPolicy] adds
+ * `X-Life-OS-Actor: user` to writes, which Life OS ignores with a key.
  */
 @Serializable
 data class RelayRequest(
@@ -57,7 +59,7 @@ enum class RelayErrorCode {
     @SerialName("forbidden")
     FORBIDDEN,
 
-    /** The phone has no service token. */
+    /** The phone has no credential for the watch: no service token, or (paired) no usable key for the watch. */
     @SerialName("no_credentials")
     NO_CREDENTIALS,
 
@@ -103,31 +105,58 @@ data class CredentialsReply(
 
 /**
  * What the watch needs to call Life OS by itself: the base URL (scheme and
- * host, no trailing slash) and a Cloudflare Access service token. Its
- * toString never shows the secret.
+ * host, no trailing slash), the Cloudflare Access service token when the
+ * server is behind Access (empty strings otherwise), and, once the phone is
+ * paired (P21-06), [deviceKey]: the watch's own key, which the phone made
+ * for it. A watch app from before 0.5.0 ignores the key and uses the token
+ * alone, which works while the server's legacy access is on. Its toString
+ * never shows a secret.
  */
 @Serializable
 class WearCredentials(
     val baseUrl: String,
-    val clientId: String,
-    val clientSecret: String,
+    val clientId: String = "",
+    val clientSecret: String = "",
+    val deviceKey: String? = null,
 ) {
+    val hasServiceToken: Boolean get() = clientId.isNotBlank() && clientSecret.isNotBlank()
+
+    val hasDeviceKey: Boolean get() = !deviceKey.isNullOrBlank()
+
     val isComplete: Boolean
-        get() = baseUrl.startsWith("https://") && clientId.isNotBlank() && clientSecret.isNotBlank()
+        get() = baseUrl.startsWith("https://") && (hasServiceToken || hasDeviceKey)
+
+    /**
+     * The headers of a call with these credentials (life-os
+     * docs/api/devices.md): the key as `Authorization: Bearer`, Access's
+     * service token, and with [actor], `X-Life-OS-Actor: user`, which only a
+     * call without a key needs.
+     */
+    fun headers(actor: Boolean): Map<String, String> = buildMap {
+        deviceKey?.takeIf { it.isNotBlank() }?.let { put("Authorization", "Bearer $it") }
+        if (hasServiceToken) {
+            put("CF-Access-Client-Id", clientId)
+            put("CF-Access-Client-Secret", clientSecret)
+        }
+        if (actor && !hasDeviceKey) put(RelayPolicy.ACTOR_HEADER, RelayPolicy.ACTOR)
+    }
 
     override fun toString() = "WearCredentials($baseUrl, …)"
 
     override fun equals(other: Any?) = other is WearCredentials &&
-        other.baseUrl == baseUrl && other.clientId == clientId && other.clientSecret == clientSecret
+        other.baseUrl == baseUrl && other.clientId == clientId && other.clientSecret == clientSecret && other.deviceKey == deviceKey
 
-    override fun hashCode() = (baseUrl.hashCode() * 31 + clientId.hashCode()) * 31 + clientSecret.hashCode()
+    override fun hashCode() = ((baseUrl.hashCode() * 31 + clientId.hashCode()) * 31 + clientSecret.hashCode()) * 31 + deviceKey.hashCode()
 }
 
 /** What an HTTP status from Life OS (behind Cloudflare Access) means for the caller. */
 enum class HttpOutcome {
     SUCCESS,
 
-    /** Access refused the token (401/403) or redirected to its login (3xx): a new token is needed. */
+    /**
+     * Access refused the token (401/403) or redirected to its login (3xx), or
+     * Life OS refused the key (401): new credentials are needed.
+     */
     AUTH,
 
     /** Worth retrying later: 408, 425, 429 and 5xx (Cloudflare's 52x included). */
@@ -143,6 +172,29 @@ enum class HttpOutcome {
             status in 300..399 || status == 401 || status == 403 -> AUTH
             status == 408 || status == 425 || status == 429 || status >= 500 -> RETRYABLE
             else -> PERMANENT
+        }
+
+        /**
+         * Like [of], with Life OS's error [body] read (P21-06): a 401
+         * `identity_expired` (a service got the identity token too late) may
+         * pass, so it is [RETRYABLE], never [AUTH]; only a 401 with a
+         * sign-in code is [AUTH]; a 401 or 403 with another code of Life
+         * OS's (`module_not_allowed`, `credential_not_allowed`…) is a
+         * refusal of the request, not of the credentials. The gateway's
+         * plain `forbidden` stays [AUTH]: it is what tunnel traffic without
+         * Access's token gets.
+         */
+        fun of(status: Int, body: ByteArray?): HttpOutcome {
+            if ((status == 401 || status == 403) && body != null) {
+                val code = LifeOsClient.errorCode(body)
+                when {
+                    code == null -> Unit
+                    status == 401 && code == LifeOsClient.IDENTITY_EXPIRED -> return RETRYABLE
+                    status == 401 && code != null && code in LifeOsClient.SIGN_IN_CODES -> return AUTH
+                    code != LifeOsClient.FORBIDDEN -> return PERMANENT
+                }
+            }
+            return of(status)
         }
     }
 }

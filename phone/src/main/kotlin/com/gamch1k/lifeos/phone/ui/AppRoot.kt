@@ -33,6 +33,16 @@ sealed interface Screen {
 
     /** Settings › Watch › Set up the watch app (P19-06). */
     data object WatchSetup : Screen
+
+    /**
+     * Pairing with an account (P21-06): [link] is a `lifeos://pair` link that
+     * came in; [server] the one to pair with when not the saved one (the
+     * first run's). The link holds a code, so it never shows in toString,
+     * which Navigation uses as the entry's saved-state key.
+     */
+    data class Pair(val link: String? = null, val server: String? = null) : Screen {
+        override fun toString() = "Pair(${server.orEmpty()}, ${link?.hashCode() ?: 0})"
+    }
 }
 
 /** Moves between screens; the back stack is a plain list (Navigation 3). */
@@ -73,6 +83,8 @@ private fun encode(screen: Screen): String? = when (screen) {
     Screen.NetworkCheck -> "network-check"
     // Its pairing state lives in memory only; after a process death it starts over from Settings.
     Screen.WatchSetup -> null
+    // The link (with its code) is not kept; the Custom Tab flow's state is in the token store.
+    is Screen.Pair -> "pair:${screen.server.orEmpty()}"
 }
 
 private fun decode(saved: String): Screen? = when {
@@ -83,6 +95,7 @@ private fun decode(saved: String): Screen? = when {
     saved == "queue" -> Screen.Queue
     saved == "settings" -> Screen.Settings
     saved == "network-check" -> Screen.NetworkCheck
+    saved.startsWith("pair:") -> Screen.Pair(server = saved.removePrefix("pair:").ifEmpty { null })
     else -> null
 }
 
@@ -94,11 +107,17 @@ fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = Mutabl
     val navigator = remember { Navigator(stack) }
     val graph = LocalContext.current.graph
     // A widget's capture button: open its screen on top of Home (once signed in).
+    // A pairing link: the Pair screen on top of whatever is open, the first run's too.
     val launch by launches.collectAsState()
     LaunchedEffect(launch) {
         val screen = launch ?: return@LaunchedEffect
         launches.value = null
-        if (stack.firstOrNull() !is Screen.Onboarding) {
+        if (screen is Screen.Pair) {
+            // Back from the browser: this link replaces the Pair screen that opened it.
+            val previous = stack.lastOrNull() as? Screen.Pair
+            if (previous != null) stack.removeAt(stack.lastIndex)
+            navigator.go(screen.copy(server = screen.server ?: previous?.server))
+        } else if (stack.firstOrNull() !is Screen.Onboarding) {
             navigator.reset(Screen.Home)
             navigator.go(screen)
         }
@@ -117,6 +136,7 @@ fun AppRoot(startSignedIn: Boolean, launches: MutableStateFlow<Screen?> = Mutabl
             entry<Screen.Settings> { SettingsScreen(navigator) }
             entry<Screen.NetworkCheck> { NetworkCheckScreen(onBack = navigator::back) }
             entry<Screen.WatchSetup> { WatchSetupScreen(navigator) }
+            entry<Screen.Pair> { PairScreen(navigator, link = it.link, server = it.server) }
         },
     )
 }

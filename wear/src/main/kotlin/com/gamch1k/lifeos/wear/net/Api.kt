@@ -23,7 +23,7 @@ enum class Unavailability {
     /** The phone app is there but does not relay (or speaks another protocol version). */
     PHONE_NO_RELAY,
 
-    /** No service token: the watch has none yet (direct) or the phone has none (relay). */
+    /** No key or service token: the watch has none yet (direct) or the phone has none for it (relay). */
     NO_CREDENTIALS,
 
     /** The network failed: no connection, DNS, TLS, timeout. */
@@ -36,7 +36,8 @@ enum class Unavailability {
 sealed interface ApiResult {
     /** Life OS answered, whatever the status. */
     class Response(val status: Int, val body: ByteArray, val route: Route) : ApiResult {
-        val outcome: HttpOutcome get() = HttpOutcome.of(status)
+        /** With the body read: Life OS's 403 `module_not_allowed` is a refusal, not a credentials problem (P21-06). */
+        val outcome: HttpOutcome get() = HttpOutcome.of(status, body)
         val text: String get() = body.toString(Charsets.UTF_8)
         override fun toString() = "Response($status via $route)"
     }

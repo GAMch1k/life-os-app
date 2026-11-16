@@ -5,8 +5,10 @@ package com.gamch1k.lifeos.core.wearlink
  * to each other over the Wear OS Data Layer. Both apps share the package name
  * and the signing key, so the Data Layer only connects these two apps.
  *
- * - The watch asks the phone for the server URL and the Cloudflare Access
- *   service token ([PATH_CREDENTIALS], a `MessageClient` request).
+ * - The watch asks the phone for the server URL and its credentials
+ *   ([PATH_CREDENTIALS], a `MessageClient` request): the Cloudflare Access
+ *   service token, and once the phone is paired (P21-06) the watch's own
+ *   device key.
  * - The watch sends Life OS API requests through the phone
  *   ([PATH_RELAY], a `MessageClient` request, for small JSON;
  *   [PATH_RELAY_CHANNEL], a `ChannelClient` channel, for audio). The phone
@@ -44,7 +46,7 @@ object WearLink {
     /** Watch → phone, `ChannelClient`: the same frames as [PATH_RELAY], for bodies too large for a message. */
     const val PATH_RELAY_CHANNEL = "/lifeos/relay-channel"
 
-    /** Phone → watch, a message without payload: the token changed; the watch asks for it again. */
+    /** Phone → watch, a message without payload: the credentials changed; the watch asks for them again. */
     const val PATH_CREDENTIALS_CHANGED = "/lifeos/credentials-changed"
 
     /** Phone → watch, a message without payload: tasks or events changed; the watch refreshes Today. */

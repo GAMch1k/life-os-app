@@ -93,7 +93,7 @@ class LifeOsApi(private val transport: ApiTransport) {
         /** A short text for the owner about a response that wasn't a success. */
         fun describe(response: ApiResult.Response): String = when (response.outcome) {
             HttpOutcome.SUCCESS -> "OK"
-            HttpOutcome.AUTH -> "Life OS refused the token (${response.status}). Update it on the phone."
+            HttpOutcome.AUTH -> "Life OS refused the watch (${response.status}). Open Life OS on the phone."
             HttpOutcome.RETRYABLE -> "Life OS is busy or down (${response.status})."
             HttpOutcome.PERMANENT -> errorMessage(response) ?: "Life OS refused the request (${response.status})."
         }

@@ -59,6 +59,23 @@
             </intent-filter>
         </activity>
 
+        <!-- Pairing (P21-06): lifeos://pair links, from the sign-in page in a Custom Tab or from a
+             QR code the camera app opened. It hands the link to MainActivity and closes. -->
+        <activity
+            android:name=".PairLinkActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lifeos" android:host="pair" />
+            </intent-filter>
+        </activity>
+
         <!-- The link to the watch app (docs/wear.md): token handoff, API relay, the watch's update reports. -->
         <service
             android:name=".wearlink.PhoneWearLinkService"

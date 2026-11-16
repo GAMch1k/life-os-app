@@ -15,14 +15,15 @@ interface WearLinkHost {
 }
 
 /**
- * Where the phone gets the server URL and service token it hands to the
- * watch. The phone app's token store implements it.
+ * Where the phone gets the server URL and the credentials it hands to the
+ * watch. The phone app's [com.gamch1k.lifeos.core.pairing.WatchKeys]
+ * implements it.
  */
 fun interface WearTokenSource {
     /**
      * The credentials the watch should use, or null when the phone has none
-     * yet. With one service token per device, this is the watch's own token;
-     * otherwise the phone's. Called on a background thread.
+     * for it: the phone's service token, and once the phone is paired the
+     * watch's own device key. Called on a background thread.
      */
     suspend fun load(): WearCredentials?
 }
@@ -34,12 +35,14 @@ fun interface WearTokenSource {
  * The implementation must:
  * - send [RelayHttpRequest.method] to the Life OS base URL plus
  *   [RelayHttpRequest.path] (path and query, already encoded), with
- *   [RelayHttpRequest.headers] (the actor is already among them on writes)
- *   and the `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers;
+ *   [RelayHttpRequest.headers] (the actor is already among them on writes),
+ *   the watch's device key as `Authorization: Bearer` once the phone is
+ *   paired (then without the actor), and the `CF-Access-Client-Id` /
+ *   `CF-Access-Client-Secret` headers when the phone has a service token;
  * - not follow redirects (a 302 to the Access login means the token was
  *   refused), and return every HTTP response, whatever its status;
  * - throw [WearRelayException] with [RelayErrorCode.NO_CREDENTIALS] when it
- *   has no token, or [RelayErrorCode.UPSTREAM_UNREACHABLE] when no HTTP
+ *   has no credential for the watch, or [RelayErrorCode.UPSTREAM_UNREACHABLE] when no HTTP
  *   response came (any other exception counts as unreachable too).
  *
  * It is called on a background thread and may suspend; the watch waits about

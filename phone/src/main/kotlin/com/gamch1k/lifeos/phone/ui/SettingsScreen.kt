@@ -20,6 +20,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gamch1k.lifeos.core.api.LifeOsException
 import com.gamch1k.lifeos.core.capture.CaptureStatus
+import com.gamch1k.lifeos.core.secrets.Pairing
 import com.gamch1k.lifeos.phone.BuildConfig
 import com.gamch1k.lifeos.phone.Dashboard
 import com.gamch1k.lifeos.phone.graph
@@ -60,6 +62,8 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val server: String? = null,
     val clientId: String? = null,
+    /** The account this phone is paired with (P21-06), or null. */
+    val pairing: Pairing? = null,
     val testing: Boolean = false,
     val testResult: String? = null,
     val testOk: Boolean = false,
@@ -71,10 +75,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val graph = application.graph
     private val test = MutableStateFlow(Triple(false, null as String?, false))
 
-    val uiState = combine(graph.tokens.connection, graph.captures.captures, graph.updates.state, test) { connection, captures, update, (testing, result, ok) ->
+    val uiState = combine(graph.tokens.connection, graph.captures.captures, graph.updates.state, test, graph.tokens.pairing) { connection, captures, update, (testing, result, ok), pairing ->
         SettingsUiState(
             server = connection?.baseUrl,
             clientId = connection?.token?.maskedClientId,
+            pairing = pairing,
             testing = testing,
             testResult = result,
             testOk = ok,
@@ -89,7 +94,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             test.value = try {
                 val connection = graph.tokens.current() ?: throw LifeOsException.NotSignedIn()
                 graph.client.testConnection(connection)
-                Triple(false, "Connected: Life OS answered through Cloudflare Access.", true)
+                val how = listOfNotNull("with this phone's key".takeIf { connection.deviceKey != null }, "through Cloudflare Access".takeIf { connection.token != null })
+                Triple(false, "Connected: Life OS answered ${how.joinToString(" and ")}.", true)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: LifeOsException) {
@@ -113,6 +119,55 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun cancelWatchUpdate() = WatchUpdateService.cancel(getApplication<Application>())
 
+    /** Settings › Account (P21-06): who the key is now; a 401 here shows "no longer connected". */
+    fun refreshIdentity() {
+        viewModelScope.launch {
+            if (graph.tokens.current()?.deviceKey == null) return@launch
+            try {
+                graph.tokens.updateIdentity(graph.client.deviceIdentity())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: LifeOsException) {
+                // Offline, or refused (the client noted that): Settings shows what it knows.
+            }
+        }
+    }
+
+    /** Settings › Watch › Connect the watch: a new key for the watch (the old one is revoked), handed over at once. */
+    val watchKeyMessage = MutableStateFlow<String?>(null)
+
+    fun connectWatch() {
+        watchKeyMessage.value = "Making a key for the watch…"
+        graph.scope.launch {
+            watchKeyMessage.value = try {
+                graph.watchKeys.replace()
+                graph.credentialsChanged()
+                "The watch has a new key; it takes it from the phone now."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: LifeOsException) {
+                "No key for the watch: ${error.message}"
+            }
+        }
+    }
+
+    val unpairing = MutableStateFlow(false)
+
+    /** Settings › Account › Unpair this phone. [done] gets whether the phone is signed out now (it had no service token). */
+    fun unpair(done: (signedOut: Boolean) -> Unit) {
+        if (unpairing.value) return
+        unpairing.value = true
+        val work = graph.scope.async {
+            graph.unpair()
+            graph.tokens.current() == null
+        }
+        viewModelScope.launch {
+            val signedOut = work.await()
+            unpairing.value = false
+            done(signedOut)
+        }
+    }
+
     val signingOut = MutableStateFlow(false)
 
     /** Runs in the app's scope: leaving Settings meanwhile must not leave the token behind. */
@@ -133,6 +188,8 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var confirmSignOut by remember { mutableStateOf(false) }
+    var confirmUnpair by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { viewModel.refreshIdentity() }
 
     Scaffold(topBar = { BackTopBar("Settings", navigator::back) }) { padding ->
         Column(
@@ -143,6 +200,10 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            RevokeNotice()
+
+            AccountSection(state, onPair = { navigator.go(Screen.Pair()) }, onUnpair = { confirmUnpair = true }, viewModel = viewModel)
+
             SectionCard("Connection") {
                 Text("Server: ${state.server ?: "not set up"}", style = MaterialTheme.typography.bodyMedium)
                 Text("Client ID: ${state.clientId ?: "none"}", style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
@@ -173,7 +234,7 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
                 )
             }
 
-            WatchSection(viewModel, onSetUp = { navigator.go(Screen.WatchSetup) })
+            WatchSection(viewModel, state.pairing, onSetUp = { navigator.go(Screen.WatchSetup) })
 
             NotificationsSection()
 
@@ -188,7 +249,11 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
             }
 
             SectionCard("Sign out") {
-                Text("Removes the service token, the push subscription, the cached Today and the capture queue from this phone.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Signs this phone's key out of Life OS (and the watch's), and removes it, the service token, the push subscription, " +
+                        "the cached Today and the capture queue from this phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 val signingOut by viewModel.signingOut.collectAsStateWithLifecycle()
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = { confirmSignOut = true }, enabled = !signingOut) { Text("Sign out") }
@@ -198,14 +263,26 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
         }
     }
 
+    if (confirmUnpair) {
+        UnpairDialog(
+            state,
+            onConfirm = {
+                confirmUnpair = false
+                viewModel.unpair { signedOut -> if (signedOut) navigator.reset(Screen.Onboarding(firstRun = true)) }
+            },
+            onDismiss = { confirmUnpair = false },
+        )
+    }
+
     if (confirmSignOut) {
         AlertDialog(
             onDismissRequest = { confirmSignOut = false },
             title = { Text("Sign out?") },
             text = {
+                val revoke = (if (state.pairing != null) "Life OS signs this phone's key out. " else "") +
+                    (if (state.clientId != null) "The service token is removed from this phone; delete it in Cloudflare to revoke it." else "")
                 Text(
-                    if (state.unsent > 0) "${state.unsent} capture(s) not sent yet will be deleted. The token is removed from this phone; delete it in Cloudflare to revoke it."
-                    else "The token is removed from this phone; delete it in Cloudflare to revoke it.",
+                    if (state.unsent > 0) "${state.unsent} capture(s) not sent yet will be deleted. $revoke" else revoke.ifBlank { "This phone forgets its connection to Life OS." },
                 )
             },
             confirmButton = {
@@ -216,6 +293,65 @@ fun SettingsScreen(navigator: Navigator, viewModel: SettingsViewModel = viewMode
             },
             dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun UnpairDialog(state: SettingsUiState, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unpair this phone?") },
+        text = {
+            Text(
+                "Life OS signs this phone's key out, and the watch's, and stops their push notifications. " +
+                    if (state.clientId != null) {
+                        "The app goes on with the Cloudflare Access service token while the server's legacy access is on; pair again any time."
+                    } else {
+                        "The phone has no service token, so it is signed out" +
+                            (if (state.unsent > 0) ", and ${state.unsent} capture(s) not sent yet are deleted." else ".")
+                    },
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Unpair") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** P21-06: the account this phone is paired with, Pair this phone / Pair again, and Unpair. */
+@Composable
+private fun AccountSection(state: SettingsUiState, onPair: () -> Unit, onUnpair: () -> Unit, viewModel: SettingsViewModel) {
+    val unpairing by viewModel.unpairing.collectAsStateWithLifecycle()
+    SectionCard("Account") {
+        val pairing = state.pairing
+        if (pairing == null) {
+            Text(
+                "Not paired with an account." +
+                    if (state.clientId != null) {
+                        " The phone uses its Cloudflare Access service token and the server's legacy access, which ends once the server's owner turns it off. Pair it before then."
+                    } else {
+                        ""
+                    },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onPair) { Text("Pair this phone") }
+        } else {
+            Text("Paired as ${pairing.account ?: "your account"} on ${PairViewModel.hostOf(pairing.server)}.", style = MaterialTheme.typography.bodyMedium)
+            val since = Times.parseOrNull(pairing.pairedAt)?.let { ", paired ${Times.short(it)}" } ?: ""
+            Text("Life OS lists this phone as \"${pairing.deviceName}\" in Settings → Devices$since.", style = MaterialTheme.typography.bodySmall)
+            if (pairing.refused) {
+                Text(
+                    "Life OS no longer accepts this phone's key: it was signed out in Settings → Devices or everywhere, or the account was disabled. " +
+                        "Pair it again; captures that could not be sent go out then.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (pairing.refused) Button(onClick = onPair, enabled = !unpairing) { Text("Pair again") }
+                OutlinedButton(onClick = onUnpair, enabled = !unpairing) { Text("Unpair this phone") }
+                if (unpairing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+        }
     }
 }
 
@@ -246,11 +382,30 @@ private fun updateActionLabel(update: UpdateState): String? = when (update) {
     else -> null
 }
 
-/** The watch app: its version, the last update, "Update now", and the one-time setup (docs/wear.md). */
+/**
+ * The watch app: its version, the last update, "Update now", and the
+ * one-time setup (docs/wear.md); once the phone is paired, the watch's own
+ * key and Connect the watch (P21-06).
+ */
 @Composable
-private fun WatchSection(viewModel: SettingsViewModel, onSetUp: () -> Unit) {
+private fun WatchSection(viewModel: SettingsViewModel, pairing: Pairing?, onSetUp: () -> Unit) {
     val status by viewModel.watch.collectAsStateWithLifecycle()
+    val keyMessage by viewModel.watchKeyMessage.collectAsStateWithLifecycle()
     SectionCard("Watch") {
+        if (pairing != null && !pairing.refused) {
+            val key = pairing.watch
+            Text(
+                when {
+                    key == null -> "The watch gets a key of its own from the phone the next time it connects."
+                    key.refused -> "Life OS no longer accepts the watch's key (it was signed out in Settings → Devices). Connect the watch to give it a new one."
+                    else -> "The watch has a key of its own: \"${key.name}\" in Settings → Devices."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (key?.refused == true) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            )
+            TextButton(onClick = viewModel::connectWatch) { Text(if (key == null) "Connect the watch" else "Give the watch a new key") }
+            keyMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
         val watch = status.watch
         Text(
             if (watch == null) "No watch app has reported to this phone yet."

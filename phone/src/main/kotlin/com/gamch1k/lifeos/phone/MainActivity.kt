@@ -77,7 +77,10 @@ class MainActivity : ComponentActivity() {
         graph.updates.onResume()
     }
 
-    /** A notification's link opens in the Dashboard; a widget button opens its capture screen. */
+    /**
+     * A notification's link opens in the Dashboard; a widget button opens its
+     * capture screen; a pairing link (from [PairLinkActivity]) the Pair screen.
+     */
     private fun handle(intent: Intent?) {
         intent ?: return
         // Reopened from Recents: the old intent comes again; it was handled already.
@@ -86,12 +89,25 @@ class MainActivity : ComponentActivity() {
             intent.getStringExtra(LifeOsNotifications.EXTRA_LINK)?.let { Dashboard.open(this, lifecycleScope, it) }
             return
         }
+        if (intent.action == ACTION_PAIR) {
+            val link = intent.getStringExtra(EXTRA_PAIR_LINK) ?: return
+            // Handled once: a recreated activity must not bring the code back.
+            intent.removeExtra(EXTRA_PAIR_LINK)
+            launches.value = Screen.Pair(link = link)
+            return
+        }
         launches.value = when (intent.getStringExtra(CaptureLinks.EXTRA_CAPTURE)) {
             "voice" -> Screen.VoiceCapture
             "photo" -> Screen.PhotoCapture(camera = true)
             "text" -> Screen.TextCapture
             else -> return
         }
+    }
+
+    companion object {
+        /** From [PairLinkActivity]: open the Pair screen with [EXTRA_PAIR_LINK]. */
+        const val ACTION_PAIR = "com.gamch1k.lifeos.action.PAIR"
+        const val EXTRA_PAIR_LINK = "com.gamch1k.lifeos.extra.PAIR_LINK"
     }
 }
 
