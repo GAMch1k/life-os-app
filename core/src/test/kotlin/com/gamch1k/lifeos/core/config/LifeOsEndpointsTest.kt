@@ -5,15 +5,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.URI
 
 class LifeOsEndpointsTest {
     @Test
-    fun `the build's servers are https origins that onboarding takes as they are`() {
-        for (origin in listOf(LifeOsEndpoints.SERVER_URL, LifeOsEndpoints.UPDATES_URL)) {
-            assertEquals(origin, ServerUrl.normalize(origin))
-            assertTrue(origin, Regex("https://[a-z0-9.-]+(:[0-9]+)?").matches(origin))
-        }
-        assertEquals("onboarding offers the build's server", LifeOsEndpoints.SERVER_URL, ServerUrl.DEFAULT)
+    fun `the build's update origin is an https origin as a saved server is written`() {
+        val origin = LifeOsEndpoints.UPDATES_URL
+        assertEquals(origin, ServerUrl.normalize(origin))
+        assertTrue(origin, Regex("https://[a-z0-9.-]+(:[0-9]+)?").matches(origin))
+    }
+
+    @Test
+    fun `the first run's hint is a reserved example name, and a valid address`() {
+        assertEquals("example.com", URI(ServerUrl.EXAMPLE).host.substringAfter('.'))
+        assertEquals(ServerUrl.EXAMPLE, ServerUrl.normalize(ServerUrl.EXAMPLE))
     }
 
     @Test

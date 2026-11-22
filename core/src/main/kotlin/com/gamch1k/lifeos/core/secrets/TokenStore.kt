@@ -16,7 +16,6 @@ import com.gamch1k.lifeos.core.api.DeviceIdentity
 import com.gamch1k.lifeos.core.api.DeviceKeyListener
 import com.gamch1k.lifeos.core.api.LifeOsJson
 import com.gamch1k.lifeos.core.api.PairedDevice
-import com.gamch1k.lifeos.core.config.LifeOsEndpoints
 import com.gamch1k.lifeos.core.pairing.PairingTarget
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -70,10 +69,13 @@ class ServiceToken(val clientId: String, val clientSecret: String) {
     }
 }
 
-/** The Life OS server address the owner types: always https, no trailing slash. */
+/**
+ * The Life OS server address the person types: always https, no trailing
+ * slash. There is no default server (P22-13): the first run asks for one.
+ */
 object ServerUrl {
-    /** The build's server (`lifeos.serverUrl`): offered at onboarding, used until one is saved. */
-    val DEFAULT: String = LifeOsEndpoints.SERVER_URL
+    /** The first run's hint, never filled in and never contacted: a reserved example name (RFC 2606). */
+    const val EXAMPLE: String = "https://lifeos.example.com"
 
     /** `lifeos.example.com` → `https://lifeos.example.com`; null for anything that is not an https URL with a host. */
     fun normalize(input: String): String? {
@@ -227,8 +229,8 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
 
     suspend fun currentPairing(): Pairing? = pairing.first()
 
-    /** The saved server address, or the default. */
-    suspend fun serverUrl(): String = store.data.first()[SERVER_URL] ?: ServerUrl.DEFAULT
+    /** The saved server address, or null on a fresh install: there is no default (P22-13). */
+    suspend fun serverUrl(): String? = serverOf(store.data.first())
 
     /**
      * Saves [baseUrl] and its service token. Another server than the saved
@@ -240,7 +242,7 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         val id = cipher.encrypt(token.clientId)
         val secret = cipher.encrypt(token.clientSecret)
         store.edit {
-            if ((it[SERVER_URL] ?: ServerUrl.DEFAULT) != url) removePairing(it)
+            if (serverOf(it) != url) removePairing(it)
             it[SERVER_URL] = url
             it[CLIENT_ID] = id
             it[CLIENT_SECRET] = secret
@@ -260,9 +262,9 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         val key = requireNotNull(DeviceKey.parse(paired.key)) { "not a device key" }
         val sealed = cipher.encrypt(key.value)
         store.edit {
-            val configured = (it[SERVER_URL] ?: ServerUrl.DEFAULT).takeIf { _ -> it[CLIENT_ID] != null || it[DEVICE_KEY] != null }
+            val configured = serverOf(it)?.takeIf { _ -> isSetUp(it) }
             check(PairingTarget.mayMoveTo(url, configured, typed)) { "this phone is set up for another server" }
-            if ((it[SERVER_URL] ?: ServerUrl.DEFAULT) != url) {
+            if (serverOf(it) != url) {
                 it.remove(CLIENT_ID)
                 it.remove(CLIENT_SECRET)
             }
@@ -362,7 +364,7 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
 
     /** The server the phone is set up for (a service token or a key), or null on a fresh install. */
     suspend fun configuredServer(): String? = store.data.first().let { preferences ->
-        (preferences[SERVER_URL] ?: ServerUrl.DEFAULT).takeIf { preferences[CLIENT_ID] != null || preferences[DEVICE_KEY] != null }
+        serverOf(preferences)?.takeIf { isSetUp(preferences) }
     }
 
     // ---- Keys Life OS has not confirmed signing out yet ([PendingRevoke])
@@ -496,7 +498,8 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         val id = preferences[CLIENT_ID]
         val secret = preferences[CLIENT_SECRET]
         val sealedKey = preferences[DEVICE_KEY]
-        val url = preferences[SERVER_URL] ?: ServerUrl.DEFAULT
+        // Null only when neither a token nor a key is stored: not set up.
+        val url = serverOf(preferences) ?: return null
         return try {
             val token = if (id != null && secret != null) ServiceToken(cipher.decrypt(id), cipher.decrypt(secret)) else null
             val key = sealedKey?.let { DeviceKey.parse(cipher.decrypt(it)) ?: throw IllegalArgumentException("not a device key") }
@@ -529,7 +532,7 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
             WatchKeyInfo(it, preferences[WATCH_NAME].orEmpty(), preferences[WATCH_CREATED_AT], preferences[WATCH_REFUSED] == true)
         }
         return Pairing(
-            server = preferences[SERVER_URL] ?: ServerUrl.DEFAULT,
+            server = serverOf(preferences) ?: return null,
             keyId = keyId,
             deviceName = preferences[DEVICE_NAME].orEmpty(),
             username = preferences[ACCOUNT_USERNAME],
@@ -539,6 +542,20 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
             watch = watch,
         )
     }
+
+    /**
+     * The server [preferences] belong to: the saved one. Builds up to 0.5.x
+     * had a default server, used until one was saved (P22-13). Every way of
+     * setting up has saved its server since this store came (0.2), but a
+     * phone set up (a service token or a key) with none saved all the same
+     * keeps the one it has been using, [LEGACY_DEFAULT_SERVER], instead of
+     * losing its connection; [migrateServer] saves it once.
+     */
+    private fun serverOf(preferences: Preferences): String? =
+        preferences[SERVER_URL] ?: LEGACY_DEFAULT_SERVER.takeIf { isSetUp(preferences) }
+
+    /** A service token or a device key is stored: the first run was completed. */
+    private fun isSetUp(preferences: Preferences): Boolean = preferences[CLIENT_ID] != null || preferences[DEVICE_KEY] != null
 
     private fun removePairing(preferences: MutablePreferences) {
         for (key in listOf(DEVICE_KEY, DEVICE_KEY_ID, DEVICE_NAME, ACCOUNT_USERNAME, ACCOUNT_NAME, PAIRED_AT, WATCH_KEY, WATCH_KEY_ID, WATCH_PARENT_ID, WATCH_NAME, WATCH_CREATED_AT)) {
@@ -554,25 +571,54 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
     }
 
     /**
-     * Moves the token the 0.1 network check stored in SharedPreferences (same
-     * Keystore key and format) into this store, once. Returns true if it did.
+     * The app's start-up migrations, before it reads the connection:
+     * [migrateServer], then the token the 0.1 network check stored in
+     * SharedPreferences (same Keystore key and format), moved into this store
+     * once ([adoptLegacyToken]). Returns true if the connection changed.
      */
     suspend fun migrateFrom(context: Context): Boolean {
+        val server = migrateServer()
         val legacy = context.applicationContext.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)
         val id = legacy.getString(LEGACY_ID, null)
         val secret = legacy.getString(LEGACY_SECRET, null)
-        if (id == null || secret == null) return false
-        var migrated = false
-        if (current() == null) {
-            try {
-                save(serverUrl(), ServiceToken(cipher.decrypt(id), cipher.decrypt(secret)))
-                migrated = true
-            } catch (_: GeneralSecurityException) {
-            } catch (_: IllegalArgumentException) {
-            }
-        }
+        if (id == null || secret == null) return server
+        val migrated = adoptLegacyToken(id, secret)
         legacy.edit().clear().apply()
-        return migrated
+        return server || migrated
+    }
+
+    /**
+     * P22-13, once: a phone that is set up but has no saved server (see
+     * [serverOf]) saves the one it has been using, [LEGACY_DEFAULT_SERVER],
+     * so it keeps working now that there is no default. A fresh install, or
+     * one with a saved server, is left alone. Returns true if it saved one.
+     */
+    suspend fun migrateServer(): Boolean {
+        var saved = false
+        store.edit {
+            if (it[SERVER_URL] != null) return@edit
+            val url = serverOf(it) ?: return@edit
+            it[SERVER_URL] = url
+            saved = true
+        }
+        return saved
+    }
+
+    /**
+     * The 0.1 network check's token, both values still sealed: kept unless the
+     * phone is set up already, for the saved server, else the only one 0.1
+     * knew ([LEGACY_DEFAULT_SERVER]). Returns true if it was kept.
+     */
+    internal suspend fun adoptLegacyToken(sealedId: String, sealedSecret: String): Boolean {
+        if (current() != null) return false
+        return try {
+            save(serverUrl() ?: LEGACY_DEFAULT_SERVER, ServiceToken(cipher.decrypt(sealedId), cipher.decrypt(sealedSecret)))
+            true
+        } catch (_: GeneralSecurityException) {
+            false
+        } catch (_: IllegalArgumentException) {
+            false
+        }
     }
 
     /** Makes this the store [ServiceTokenStore] reads; the app calls it once at start. */
@@ -584,6 +630,15 @@ class TokenStore(private val store: DataStore<Preferences>, private val cipher: 
         @Volatile
         internal var installed: TokenStore? = null
             private set
+
+        /**
+         * The default server of builds up to 0.5.x, and the only server the
+         * 0.1 network check knew: the maintainer's own Life OS, which is
+         * private. Never offered, never filled in; only a phone that was set
+         * up with it but never saved it keeps it ([serverOf]). Keep the value
+         * as it is: such a phone would lose its connection otherwise.
+         */
+        internal const val LEGACY_DEFAULT_SERVER = "https://lifeos.gamch1k.com"
 
         /** How long the browser may take for the Custom Tab flow (the code itself works 5 minutes). */
         const val PENDING_MAX_AGE_MILLIS = 15 * 60_000L

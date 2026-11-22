@@ -12,10 +12,10 @@ import java.net.URI
  */
 sealed interface UpdateSource {
     /**
-     * `/android/updates` on the update origin (`lifeos.updatesUrl`, the
-     * official server), with the server's Access token: the app is connected
-     * to that server, which is the owner's case. Its APKs are paths under
-     * `/android/` on the same origin.
+     * `/android/updates` on the update origin (`lifeos.updatesUrl`, by
+     * default the maintainer's own Life OS), with the server's Access token:
+     * the app is connected to that very server, which is the maintainer's
+     * case. Its APKs are paths under `/android/` on the same origin.
      */
     data object UpdateOrigin : UpdateSource
 
@@ -28,9 +28,9 @@ sealed interface UpdateSource {
      */
     data class GitHubRepo(val repo: String) : UpdateSource
 
-    /** For the owner: "the official server (lifeos.example.com)", "GitHub (owner/name releases)". */
+    /** For Settings: "your server (lifeos.example.com)" (the app is connected to it), "GitHub (owner/name releases)". */
     fun describe(updatesUrl: String = LifeOsEndpoints.UPDATES_URL): String = when (this) {
-        UpdateOrigin -> "the official server (${runCatching { URI(updatesUrl).host }.getOrNull() ?: updatesUrl})"
+        UpdateOrigin -> "your server (${runCatching { URI(updatesUrl).host }.getOrNull() ?: updatesUrl})"
         is GitHubRepo -> "GitHub ($repo releases)"
     }
 

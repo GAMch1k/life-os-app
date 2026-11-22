@@ -3,10 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// The default server, the update origin and the update repository: the build
-// settings lifeos.serverUrl, lifeos.updatesUrl and lifeos.updatesRepo,
-// resolved in the root build.gradle.kts.
-val lifeosServerUrl: String by rootProject.extra
+// The update origin and the update repository: the build settings
+// lifeos.updatesUrl and lifeos.updatesRepo, resolved in the root
+// build.gradle.kts. There is no default server (P22-13).
 val lifeosUpdatesUrl: String by rootProject.extra
 val lifeosUpdatesRepo: String by rootProject.extra
 
@@ -19,7 +18,6 @@ android {
         // The lowest of the two apps (wear), so both can depend on core.
         minSdk = libs.versions.wearMinSdk.get().toInt()
         // Read through LifeOsEndpoints, which both apps use.
-        buildConfigField("String", "SERVER_URL", "\"$lifeosServerUrl\"")
         buildConfigField("String", "UPDATES_URL", "\"$lifeosUpdatesUrl\"")
         buildConfigField("String", "UPDATES_REPO", "\"$lifeosUpdatesRepo\"")
     }

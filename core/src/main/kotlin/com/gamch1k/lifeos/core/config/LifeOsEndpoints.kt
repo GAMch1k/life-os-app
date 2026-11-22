@@ -4,24 +4,20 @@ import com.gamch1k.lifeos.core.BuildConfig
 import java.net.URI
 
 /**
- * Where Life OS lives on the internet (behind Cloudflare and Cloudflare Access).
- * Build settings decide it (README, "Servers"), for the phone and the watch
- * app alike: the server and the update origin default to the official server,
- * `https://lifeos.gamch1k.com`, the update repository to `GAMch1k/life-os-app`.
+ * Where the apps get their updates, and the addresses the network check
+ * probes on a server. There is no default server (P22-13): the server is the
+ * one the person typed at the first run and the phone saved
+ * ([com.gamch1k.lifeos.core.secrets.TokenStore.serverUrl]); the watch takes
+ * it from the phone. Build settings decide where updates come from (README,
+ * "Servers and updates"), for the phone and the watch app alike.
  */
 object LifeOsEndpoints {
     /**
-     * The server onboarding offers (`lifeos.serverUrl`), used until the owner
-     * saves another: an https origin, no trailing slash. The server in use is
-     * the saved one ([com.gamch1k.lifeos.core.secrets.TokenStore.serverUrl]).
-     */
-    val SERVER_URL: String = BuildConfig.SERVER_URL
-
-    /**
-     * Where app updates come from while the app is connected to it
-     * (`lifeos.updatesUrl`): the phone's manifest and APKs, and the watch's
-     * own APK download, at `/android/`. Never another saved server: an app
-     * connected to one updates from [UPDATES_REPO] instead
+     * Where app updates come from while the app is connected to that very
+     * server (`lifeos.updatesUrl`; by default the maintainer's own, private
+     * Life OS): the phone's manifest and APKs, and the watch's own APK
+     * download, at `/android/`. Never another saved server: an app connected
+     * to one updates from [UPDATES_REPO] instead
      * ([com.gamch1k.lifeos.core.update.UpdateSource]).
      */
     val UPDATES_URL: String = BuildConfig.UPDATES_URL

@@ -43,4 +43,4 @@ CI also runs the CLA check's own unit tests, and skips a change that touches onl
 
 1. A pull request is checked by CI, reviewed, and merged into `main` by the maintainer.
 2. Releases are built and signed on the maintainer's server with `tools/build`. The release key never leaves that server and never goes to GitHub; CI's APKs are unsigned and are not published ([Signing](README.md#signing)).
-3. The signed APKs are published on the official Life OS server, from which the installed apps update themselves. GitHub Releases with the APKs, for people who run their own Life OS, are planned (P20-06).
+3. The signed APKs are published as GitHub Releases of this repository, from which the installed apps update themselves (P20-06), and on the maintainer's own Life OS for the maintainer's devices ([Servers and updates](README.md#servers-and-updates)).

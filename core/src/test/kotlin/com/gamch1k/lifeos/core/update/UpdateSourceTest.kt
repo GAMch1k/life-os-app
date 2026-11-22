@@ -30,7 +30,7 @@ class UpdateSourceTest {
 
     @Test
     fun `the owner is told where updates come from and where to install by hand`() {
-        assertEquals("the official server (lifeos.example.com)", UpdateSource.UpdateOrigin.describe(origin))
+        assertEquals("your server (lifeos.example.com)", UpdateSource.UpdateOrigin.describe(origin))
         assertEquals("https://lifeos.example.com/android/", UpdateSource.UpdateOrigin.downloadPage(origin))
         assertEquals("GitHub (GAMch1k/life-os-app releases)", UpdateSource.GitHubRepo(repo).describe(origin))
         assertEquals("https://github.com/GAMch1k/life-os-app/releases", UpdateSource.GitHubRepo(repo).downloadPage(origin))

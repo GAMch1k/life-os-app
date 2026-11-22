@@ -54,7 +54,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class OnboardingState(
-    val server: String = ServerUrl.DEFAULT,
+    /** Empty at the first run: there is no default server (P22-13). */
+    val server: String = "",
     val clientId: String = "",
     val clientSecret: String = "",
     val testing: Boolean = false,
@@ -80,7 +81,11 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     val uiState = state.asStateFlow()
 
     init {
-        viewModelScope.launch { state.update { it.copy(server = graph.tokens.serverUrl()) } }
+        viewModelScope.launch {
+            val saved = graph.tokens.serverUrl() ?: return@launch
+            // Only into an untouched field: what the person typed meanwhile stays.
+            state.update { if (it.server.isEmpty()) it.copy(server = saved) else it }
+        }
     }
 
     fun edit(server: String = state.value.server, clientId: String = state.value.clientId, clientSecret: String = state.value.clientSecret) =
@@ -90,7 +95,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         val current = state.value
         val url = ServerUrl.normalize(current.server)
         if (url == null) {
-            state.update { it.copy(message = "The server must be an https:// address, such as ${ServerUrl.DEFAULT}.", messageIsError = true) }
+            state.update { it.copy(message = SERVER_NEEDED, messageIsError = true) }
             return null
         }
         val token = ServiceToken.parse(current.clientId, current.clientSecret)
@@ -104,7 +109,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     /** The server to pair with: the typed one, or null (with a message) when it is not an https address. */
     fun pairingServer(): String? {
         val url = ServerUrl.normalize(state.value.server)
-        if (url == null) state.update { it.copy(message = "The server must be an https:// address, such as ${ServerUrl.DEFAULT}.", messageIsError = true) }
+        if (url == null) state.update { it.copy(message = SERVER_NEEDED, messageIsError = true) }
         return url
     }
 
@@ -179,6 +184,10 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             val token = ServiceToken.parse(current.clientId, current.clientSecret)
             token != null && current.tested == Triple(url, token.clientId, token.clientSecret)
         }
+
+    private companion object {
+        const val SERVER_NEEDED = "Enter your Life OS's https:// address, such as ${ServerUrl.EXAMPLE}."
+    }
 }
 
 @Composable
@@ -206,7 +215,7 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
             RevokeNotice()
             Text(
                 "The app signs in to Life OS with a key of its own, which it gets when you pair it with your account. " +
-                    "A Life OS behind Cloudflare Access (the official server is) also needs a service token made for this phone: " +
+                    "A Life OS behind Cloudflare Access also needs a service token made for this phone: " +
                     "connect with it below first, then pair. Both are stored encrypted with the Android Keystore and sent only to your server.",
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -214,7 +223,8 @@ fun OnboardingScreen(navigator: Navigator, firstRun: Boolean, viewModel: Onboard
                 value = state.server,
                 onValueChange = { viewModel.edit(server = it) },
                 label = { Text("Server") },
-                supportingText = { Text("The official server is ${ServerUrl.DEFAULT}; your own Life OS works too.") },
+                placeholder = { Text(ServerUrl.EXAMPLE) },
+                supportingText = { Text("The address of your own Life OS, as you open it in the browser.") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),

@@ -20,7 +20,8 @@ import kotlinx.coroutines.withContext
 object Dashboard {
     fun open(context: Context, scope: CoroutineScope, path: String = "/") {
         scope.launch {
-            val base = withContext(Dispatchers.IO) { context.graph.tokens.serverUrl() }
+            // No server saved yet (a fresh install): there is no Dashboard to open.
+            val base = withContext(Dispatchers.IO) { context.graph.tokens.serverUrl() } ?: return@launch
             val uri = Uri.parse(base.trimEnd('/') + path)
             try {
                 CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, uri)
