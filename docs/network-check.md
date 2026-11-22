@@ -4,7 +4,7 @@ The phone app's first screen answers one question: **can this phone reach Life O
 
 ## Why
 
-The owner's work Wi-Fi resets every TLS handshake that carries `lifeos.gamch1k.com` in clear SNI. The browser still gets through, because Cloudflare publishes ECH (Encrypted Client Hello) for the hostname. The DNS HTTPS record carries `ech=…`, with the public name `cloudflare-ech.com`. An ECH-capable browser reads it and sends only `cloudflare-ech.com` in clear. Android 16 has no platform ECH API, so the app embeds **Cronet**, Chromium's network stack, and turns on its **built-in DNS resolver**. That resolver queries HTTPS records, which the system's `getaddrinfo` cannot. The screen shows whether this works on the real phone and the real network.
+Some networks (the maintainer's work Wi-Fi among them) reset every TLS handshake that carries the Life OS server's hostname in clear SNI. The browser still gets through, because Cloudflare publishes ECH (Encrypted Client Hello) for the hostname. The DNS HTTPS record carries `ech=…`, with the public name `cloudflare-ech.com`. An ECH-capable browser reads it and sends only `cloudflare-ech.com` in clear. Android 16 has no platform ECH API, so the app embeds **Cronet**, Chromium's network stack, and turns on its **built-in DNS resolver**. That resolver queries HTTPS records, which the system's `getaddrinfo` cannot. The screen shows whether this works on the real phone and the real network.
 
 ## Using it
 
@@ -26,7 +26,7 @@ When the result isn't GO, hints follow. The most likely cause is **Private DNS**
 
 ### 1. Cronet, embedded, built-in DNS
 
-A GET to `/cdn-cgi/trace` on the server the app is set to (by default `https://lifeos.gamch1k.com/cdn-cgi/trace`); every probe goes to that server, the one the token belongs to. Cloudflare's edge answers it itself, without an Access login, and reports what it saw:
+A GET to `/cdn-cgi/trace` on the server the app is set to (such as `https://lifeos.example.com/cdn-cgi/trace`); every probe goes to that server, the one the token belongs to. Cloudflare's edge answers it itself, without an Access login, and reports what it saw:
 
 | Line | Meaning |
 |---|---|
@@ -59,7 +59,7 @@ The same GET through Android's built-in Cronet (`android.net.http.HttpEngine`, p
 
 ### 3b. DNS HTTPS record via the system resolver
 
-This asks the phone's normal resolver, which honours Private DNS, for the `HTTPS` record of the server's hostname (`lifeos.gamch1k.com` by default). Expect `alpn=h3,h2  ech=yes (… bytes, public name cloudflare-ech.com)`.
+This asks the phone's normal resolver, which honours Private DNS, for the `HTTPS` record of the server's hostname (such as `lifeos.example.com`). Expect `alpn=h3,h2  ech=yes (… bytes, public name cloudflare-ech.com)`.
 
 - `ech=no` or no record: this network's DNS strips HTTPS records, so ECH can't work here.
 - `ech=yes` while Cronet still says plaintext: the key exists, but Cronet didn't use it. Run the check again; see the hints on the screen.

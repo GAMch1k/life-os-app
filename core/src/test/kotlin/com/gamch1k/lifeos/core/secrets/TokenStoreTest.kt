@@ -1,10 +1,13 @@
 package com.gamch1k.lifeos.core.secrets
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.gamch1k.lifeos.core.TestDataStores
 import com.gamch1k.lifeos.core.api.AccountUser
 import com.gamch1k.lifeos.core.api.ChildKey
+import com.gamch1k.lifeos.core.api.Connection
 import com.gamch1k.lifeos.core.api.DeviceIdentity
 import com.gamch1k.lifeos.core.api.PairedDevice
 import kotlinx.coroutines.flow.first
@@ -63,7 +66,7 @@ class TokenStoreTest {
     fun `a lost Keystore key means signed out, not a crash`() = runBlocking {
         val cipher = FakeCipher()
         val store = TokenStore(stores.create(), cipher)
-        store.save(ServerUrl.DEFAULT, token)
+        store.save("https://lifeos.example.com", token)
         cipher.keyLost = true
         assertNull(store.current())
     }
@@ -80,8 +83,12 @@ class TokenStoreTest {
     }
 
     @Test
-    fun `the default server is used until one is saved`() = runBlocking {
-        assertEquals(ServerUrl.DEFAULT, TokenStore(stores.create(), FakeCipher()).serverUrl())
+    fun `a fresh install has no server, there is no default`() = runBlocking {
+        val store = TokenStore(stores.create(), FakeCipher())
+        assertNull(store.serverUrl())
+        assertNull(store.current())
+        assertNull(store.configuredServer())
+        assertNull(store.currentPairing())
     }
 
     @Test
@@ -100,9 +107,9 @@ class TokenStoreTest {
     @Test
     fun `a new token replaces the old one at once`() = runBlocking {
         val store = TokenStore(stores.create(), FakeCipher())
-        store.save(ServerUrl.DEFAULT, token)
+        store.save("https://lifeos.example.com", token)
         assertEquals(token.clientId, store.current()!!.token!!.clientId)
-        store.save(ServerUrl.DEFAULT, ServiceToken("other.access", "other-secret"))
+        store.save("https://lifeos.example.com", ServiceToken("other.access", "other-secret"))
         assertEquals("other.access", store.current()!!.token!!.clientId)
         assertEquals("other-secret", store.current()!!.token!!.clientSecret)
     }
@@ -308,5 +315,128 @@ class TokenStoreTest {
         assertTrue(again != id)
         store.revokeDone(again)
         assertTrue(store.revokes.first().isEmpty())
+    }
+
+    // ---- No default server (P22-13): a phone set up before keeps its server
+
+    private val legacy = TokenStore.LEGACY_DEFAULT_SERVER
+    private val serverKey = stringPreferencesKey("server-url")
+
+    /** What a build with a default server would leave had it stored a token without the address. */
+    private suspend fun tokenWithoutServer(dataStore: DataStore<Preferences>, cipher: SecretCipher) {
+        dataStore.edit {
+            it[stringPreferencesKey("client-id")] = cipher.encrypt(token.clientId)
+            it[stringPreferencesKey("client-secret")] = cipher.encrypt(token.clientSecret)
+        }
+    }
+
+    @Test
+    fun `a phone set up with a token but no saved server keeps the old default, saved once`() = runBlocking {
+        val dataStore = stores.create()
+        val cipher = FakeCipher()
+        val store = TokenStore(dataStore, cipher)
+        tokenWithoutServer(dataStore, cipher)
+
+        // Before the migration ran (a worker or the watch asking first), reads already keep the server.
+        assertEquals(legacy, store.current()!!.baseUrl)
+        assertEquals(token.clientSecret, store.current()!!.token!!.clientSecret)
+        assertEquals(legacy, store.serverUrl())
+        assertEquals(legacy, store.configuredServer())
+
+        assertTrue(store.migrateServer())
+        assertEquals("saved now", legacy, dataStore.data.first()[serverKey])
+        assertFalse("once", store.migrateServer())
+        assertEquals(legacy, store.current()!!.baseUrl)
+        assertEquals(token.clientId, store.current()!!.token!!.clientId)
+
+        // A pairing link for that server needs nothing typed, and the token stays: same server.
+        store.savePairing(legacy, paired, "Pixel 9")
+        assertEquals(token.clientId, store.current()!!.token!!.clientId)
+        assertEquals(legacy, store.currentPairing()!!.server)
+    }
+
+    @Test
+    fun `a paired phone without a saved server keeps it with its pairing and its watch's key`() = runBlocking {
+        val dataStore = stores.create()
+        val store = TokenStore(dataStore, FakeCipher())
+        store.save(legacy, token)
+        store.savePairing(legacy, paired, "Pixel 9")
+        store.saveWatchKey(ChildKey(watchKey, "6a1f", "Galaxy Watch8"), paired.keyId, "Galaxy Watch8")
+        dataStore.edit { it.remove(serverKey) }
+
+        val connection = store.current()!!
+        assertEquals(legacy, connection.baseUrl)
+        assertEquals(phoneKey, connection.deviceKey!!.value)
+        assertEquals(legacy, store.currentPairing()!!.server)
+        assertEquals(watchKey, store.watchKey()!!.key.value)
+
+        // Edit connection with the same server and a new token: still paired.
+        store.save(legacy, ServiceToken("new.access", "new-secret"))
+        assertEquals(phoneKey, store.current()!!.deviceKey!!.value)
+        assertEquals("new.access", store.current()!!.token!!.clientId)
+
+        dataStore.edit { it.remove(serverKey) }
+        assertTrue(store.migrateServer())
+        assertEquals(legacy, dataStore.data.first()[serverKey])
+        assertEquals(watchKey, store.watchKey()!!.key.value)
+
+        // A key alone (a server without Access) counts as set up too.
+        val keyOnlyData = stores.create()
+        keyOnlyData.edit { it[stringPreferencesKey("device-key")] = FakeCipher().encrypt(phoneKey) }
+        val keyOnly = TokenStore(keyOnlyData, FakeCipher())
+        assertEquals(legacy, keyOnly.current()!!.baseUrl)
+        assertTrue(keyOnly.migrateServer())
+    }
+
+    @Test
+    fun `the migration leaves a fresh install, a saved server and a signed-out phone alone`() = runBlocking {
+        val fresh = TokenStore(stores.create(), FakeCipher())
+        assertFalse(fresh.migrateServer())
+        assertNull("never invents a server", fresh.serverUrl())
+
+        val own = TokenStore(stores.create(), FakeCipher())
+        own.save("https://own.example.org", token)
+        assertFalse(own.migrateServer())
+        assertEquals("https://own.example.org", own.current()!!.baseUrl)
+
+        val signedOut = TokenStore(stores.create(), FakeCipher())
+        signedOut.save("https://own.example.org", token)
+        signedOut.clear()
+        assertFalse(signedOut.migrateServer())
+        assertEquals("the next sign-in starts from it", "https://own.example.org", signedOut.serverUrl())
+        assertNull(signedOut.current())
+        assertNull(signedOut.configuredServer())
+
+        // A key queued to be signed out, or a pairing in the browser, is not a set-up phone either.
+        val leaving = TokenStore(stores.create(), FakeCipher())
+        leaving.savePending(PendingPairing("https://own.example.org", "state-abcdefgh", "verifier", startedAtMillis = 1_000))
+        leaving.queueRevoke(Connection("https://own.example.org", null, DeviceKey.parse(phoneKey)))
+        assertFalse(leaving.migrateServer())
+        assertNull(leaving.serverUrl())
+    }
+
+    @Test
+    fun `the network check's old token goes to the saved server, else the only server it knew`() = runBlocking {
+        val cipher = FakeCipher()
+        val sealedId = cipher.encrypt(token.clientId)
+        val sealedSecret = cipher.encrypt(token.clientSecret)
+
+        val fresh = TokenStore(stores.create(), cipher)
+        assertTrue(fresh.adoptLegacyToken(sealedId, sealedSecret))
+        assertEquals(legacy, fresh.current()!!.baseUrl)
+        assertEquals(token.clientSecret, fresh.current()!!.token!!.clientSecret)
+
+        val typedBefore = TokenStore(stores.create(), cipher)
+        typedBefore.save("https://own.example.org", ServiceToken("own.access", "own-secret"))
+        typedBefore.clear()
+        assertTrue(typedBefore.adoptLegacyToken(sealedId, sealedSecret))
+        assertEquals("https://own.example.org", typedBefore.current()!!.baseUrl)
+
+        val setUp = TokenStore(stores.create(), cipher)
+        setUp.save("https://own.example.org", ServiceToken("own.access", "own-secret"))
+        assertFalse(setUp.adoptLegacyToken(sealedId, sealedSecret))
+        assertEquals("own.access", setUp.current()!!.token!!.clientId)
+
+        assertFalse("unreadable", TokenStore(stores.create(), cipher).adoptLegacyToken("garbage", "garbage"))
     }
 }

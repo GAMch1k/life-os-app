@@ -77,7 +77,11 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class PairUiState(
-    /** The server the code is redeemed at: the app's, or the one the person typed (first run, Edit connection). */
+    /**
+     * The server the code is redeemed at: the app's, or the one the person
+     * typed (first run, Edit connection). Empty on a fresh install opened by
+     * a pairing link: only the link's server, after "Pair with …?", is known.
+     */
     val server: String = "",
     /** The server the app is set up for (a token or a key), or null on a fresh install. */
     val configured: String? = null,
@@ -118,7 +122,7 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val saved = graph.tokens.serverUrl()
             val typed = server?.let(ServerUrl::normalize)
-            state.update { it.copy(server = typed ?: saved, configured = graph.tokens.configuredServer(), typed = typed) }
+            state.update { it.copy(server = typed ?: saved.orEmpty(), configured = graph.tokens.configuredServer(), typed = typed) }
             if (link != null) handleLink(link)
         }
     }
@@ -179,6 +183,7 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
     fun editCode(text: String) = state.update { it.copy(code = text, message = null) }
 
     fun pairWithCode() {
+        if (state.value.server.isEmpty()) return fail(NO_SERVER)
         val code = PairingCode.normalize(state.value.code)
             ?: return fail("A pairing code has 16 letters and digits, such as K7QM-2XRP-9VDA-H4TC.")
         // The server on screen: the phone's, or the one the person typed.
@@ -188,6 +193,7 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
     /** "Sign in on this phone": remembers the verifier and state, then [open]s the sign-in page in a Custom Tab. */
     fun signInInBrowser(open: (Uri) -> Unit) {
         val server = state.value.server
+        if (server.isEmpty()) return fail(NO_SERVER)
         val challenge = PairingChallenge.create()
         viewModelScope.launch {
             graph.tokens.savePending(PendingPairing(server, challenge.state, challenge.verifier, System.currentTimeMillis()))
@@ -304,6 +310,9 @@ class PairViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** A typed code or the browser's sign-in on a fresh install: no server to send it to. */
+        const val NO_SERVER = "This phone has no server yet. Scan the QR code from your Life OS, or go back and enter its address first."
+
         /** The server as the person reads it: host, and port if any. */
         fun hostOf(server: String): String = PairingLink.authorityOf(server)
 
@@ -408,7 +417,7 @@ private fun PairChoices(state: PairUiState, viewModel: PairViewModel, onScan: ()
                 "and Life OS (Settings → Devices) can sign it out at any time. Its watch gets a key of its own too.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Text("Server: ${state.server}", style = MaterialTheme.typography.bodyMedium)
+        Text("Server: ${state.server.ifEmpty { "none yet" }}", style = MaterialTheme.typography.bodyMedium)
 
         SectionCard("With a second screen") {
             Text(

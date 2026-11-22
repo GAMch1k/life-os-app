@@ -34,7 +34,7 @@ Both apps are `com.gamch1k.lifeos` and signed with the same key, so the Data Lay
 The watch never asks the owner for a token or a key. It asks the phone:
 
 1. The watch finds the phone by its capability (a nearby, Bluetooth-connected node first) and sends a `MessageClient` request on `/lifeos/credentials`: `{"v":1,"id":"<uuid>"}`.
-2. The phone's listener asks `WearTokenSource.load()` (`WatchKeys`) and answers `{"v":1,"id":…,"credentials":{"baseUrl":"https://lifeos.gamch1k.com","clientId":…,"clientSecret":…,"deviceKey":"lo_dev_…"}}`, or an error `no_credentials`. `clientId` and `clientSecret` are the phone's Cloudflare Access service token (empty without one); `deviceKey` is the **watch's own device key** once the phone is paired with an account (P21-06, 0.5.0), absent before.
+2. The phone's listener asks `WearTokenSource.load()` (`WatchKeys`) and answers `{"v":1,"id":…,"credentials":{"baseUrl":"https://lifeos.example.com","clientId":…,"clientSecret":…,"deviceKey":"lo_dev_…"}}`, or an error `no_credentials`. `clientId` and `clientSecret` are the phone's Cloudflare Access service token (empty without one); `deviceKey` is the **watch's own device key** once the phone is paired with an account (P21-06, 0.5.0), absent before.
 3. The watch keeps them encrypted with an AES-256-GCM key in its own Android Keystore (`CredentialStore`); only ciphertext reaches SharedPreferences, and backups are off.
 
 The watch asks when it starts without credentials, when the phone app comes into reach without them, when Life OS refuses them (401, 403 or a redirect to the Access login), when the owner taps **Get token from phone**, and when the phone pings `/lifeos/credentials-changed` (after a new token, pairing, unpairing, or a new watch key).
@@ -57,7 +57,7 @@ Every API call from the watch goes through `RoutingTransport`:
 
 Why the phone first:
 
-- The owner's work Wi-Fi resets every TLS handshake that carries `lifeos.gamch1k.com` in clear text. Only an ECH-capable stack gets through, and the phone has the better one: its own client, kept up to date with the phone app, plus a bigger battery and warm connections.
+- Some networks (the maintainer's work Wi-Fi among them) reset every TLS handshake that carries the server's hostname in clear text. Only an ECH-capable stack gets through, and the phone has the better one: its own client, kept up to date with the phone app, plus a bigger battery and warm connections.
 - When the watch is on Bluetooth, its own internet traffic goes through the phone anyway, only slower. The relay uses the Bluetooth link directly, and the watch's Wi-Fi radio can stay off.
 - An HTTP answer through the phone is final, even an error: the direct path would reach the same server with the same token.
 
@@ -189,7 +189,7 @@ What the phone app (P18-05) sets on each Life OS notification (`phone/…/push/L
 All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements every piece: `LifeOsApp` is the `WearLinkHost` (`core/…/wearlink/PhoneWearLinkHost.kt`), `TokenStore` is the `WearTokenSource`, the relay is `LifeOsClient.relay()`, and the app pings the watch when the token is saved or removed and when Today's data changes (a refresh that found other Tasks or events, a Done, a push about Tasks or events). `PhoneWearLinkHostTest` runs it end to end through the real handler.
 
 1. **`WearLinkHost`**: the phone app's `Application` implements it, so the listener finds the two pieces below. Without it, the listener falls back as described under "The listener's fallback" below.
-2. **`WearTokenSource.load(): WearCredentials?`**, implemented by `WatchKeys` (0.5.0; the token store before): the base URL (the phone's saved server, `https://lifeos.gamch1k.com` unless the owner chose another), the phone's service token if any, and once the phone is paired the watch's own device key ([The watch's key](#token-handoff)); or null when there is nothing for the watch.
+2. **`WearTokenSource.load(): WearCredentials?`**, implemented by `WatchKeys` (0.5.0; the token store before): the base URL (the server saved on the phone; there is no default server since P22-13, and the watch never has one of its own), the phone's service token if any, and once the phone is paired the watch's own device key ([The watch's key](#token-handoff)); or null when there is nothing for the watch.
 3. **`WearRelay.execute(RelayHttpRequest): RelayHttpResponse`**, implemented with the phone's ECH-capable client:
    - send `method` to the base URL plus `path`, with `headers` (the actor is already among them on writes; dropped when a key goes along), the body, the watch's key as `Authorization: Bearer` once the phone is paired, and the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers when the phone has a service token;
    - don't follow redirects, and return every HTTP response, whatever its status;
@@ -204,9 +204,9 @@ All in `core/…/wearlink/WearRelay.kt`; since 0.3.0 the phone app implements ev
 
 The watch app is not in the Play Store, and the owner has no computer at hand. So the phone app installs it, once, as an ADB client over the watch's Wireless debugging, and then sends it every new version over the Data Layer; the watch installs those itself, without a prompt.
 
-Updates come from the phone's **update source** (README, [Servers](../README.md#servers-official-default-your-own-and-updates); `core/…/update/UpdateSource.kt`), for the phone's manifest and APK downloads (`LifeOsClient.updateManifest`, `download`) and the watch's own download (`DirectDownload`) alike, never from another server set in the app:
+Updates come from the phone's **update source** (README, [Servers](../README.md#servers-and-updates); `core/…/update/UpdateSource.kt`), for the phone's manifest and APK downloads (`LifeOsClient.updateManifest`, `download`) and the watch's own download (`DirectDownload`) alike, never from another server set in the app:
 
-- while the phone is connected to the **update origin**, the build setting `lifeos.updatesUrl` (by default the official `https://lifeos.gamch1k.com`): `/android/updates` there, with the server's service token and, once paired, the device key (the phone's for its own downloads, the watch's for the watch's);
+- while the phone is connected to the **update origin**, the build setting `lifeos.updatesUrl` (by default the maintainer's own, private Life OS): `/android/updates` there, with the server's service token and, once paired, the device key (the phone's for its own downloads, the watch's for the watch's);
 - otherwise (another server, or none yet): the latest **GitHub Release** of `lifeos.updatesRepo` (by default `GAMch1k/life-os-app`, since 0.4.6, P20-06): its `updates.json` and APK assets, with no token, following redirects only to GitHub's own hosts.
 
 A token or key for another server never leaves for the update origin, and no token or key goes to GitHub. Each source's manifest may only name its own files.

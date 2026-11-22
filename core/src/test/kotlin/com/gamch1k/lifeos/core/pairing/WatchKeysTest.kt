@@ -1,5 +1,7 @@
 package com.gamch1k.lifeos.core.pairing
 
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.gamch1k.lifeos.core.TestDataStores
 import com.gamch1k.lifeos.core.api.FakeTransport
 import com.gamch1k.lifeos.core.api.LifeOsClient
@@ -41,7 +43,8 @@ class WatchKeysTest {
 
     private val server = ContractServer(access = FakeTransport.TOKEN)
     // Lazy: the DataStore needs the rule's folder, which exists only once the test runs.
-    private val tokens by lazy { TokenStore(stores.create(), PlainCipher) }
+    private val dataStore by lazy { stores.create() }
+    private val tokens by lazy { TokenStore(dataStore, PlainCipher) }
     private val client by lazy { LifeOsClient(server, { tokens.current() }, "ua", updatesUrl = server.publicUrl, sleep = {}, keyListener = tokens) }
     private val keys by lazy { WatchKeys(tokens, client) { "Galaxy Watch8 (A1B2)" } }
     private val handler by lazy { PhoneWearLinkHost(keys, client).let { PhoneWearLinkHandler(it.wearTokenSource, it.wearRelay) } }
@@ -192,5 +195,19 @@ class WatchKeysTest {
         tokens.clearPairing()
         tokens.saveWatchKey(child, parentKeyId = pairing.keyId, watchName = "Galaxy Watch8")
         assertNull(tokens.watchKey())
+    }
+
+    @Test
+    fun `a phone set up before there was no default server hands the watch the server it kept`() = runBlocking {
+        paired()
+        val before = credentials().credentials!!
+        // As a build with a default server would have left it: no saved address (P22-13).
+        dataStore.edit { it.remove(stringPreferencesKey("server-url")) }
+        val after = credentials("c-2").credentials!!
+        assertEquals(TokenStore.LEGACY_DEFAULT_SERVER, after.baseUrl)
+        assertEquals("the same key and token, only the server the phone has been using", before.deviceKey, after.deviceKey)
+        assertEquals(before.clientSecret, after.clientSecret)
+        assertTrue(after.isComplete)
+        assertEquals(1, childRequests().size)
     }
 }
