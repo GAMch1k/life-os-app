@@ -7,9 +7,9 @@ phoneMinSdk = "34"
 wearMinSdk = "33"
 buildTools = "36.1.0"   # must match tools/builder/Dockerfile
 
-agp = "9.5.1"
+agp = "9.5.2"
 kotlin = "2.4.21"
-composeBom = "2026.09.00"
+composeBom = "2026.11.01"
 wearCompose = "1.7.1"
 activityCompose = "1.13.0"
 coreKtx = "1.19.1"
@@ -30,7 +30,7 @@ work = "2.12.0"
 # Push (P18-05): the UnifiedPush connector decrypts Web Push; the embedded
 # FCM distributor registers with Play services using the server's VAPID key,
 # so no Firebase project of ours and no gateway.
-unifiedpush = "3.3.5"
+unifiedpush = "3.3.6"
 unifiedpushEmbeddedFcm = "3.1.0"
 glance = "1.2.0"
 # The watch setup (P19-06): the phone is the ADB client for the one-time
