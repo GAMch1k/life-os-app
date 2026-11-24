@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.gamch1k.lifeos.wear"
     compileSdk = libs.versions.compileSdk.get().toInt()
+    compileSdkMinor = libs.versions.compileSdkMinor.get().toInt()
     buildToolsVersion = libs.versions.buildTools.get()
 
     defaultConfig {

@@ -14,10 +14,12 @@ FROM eclipse-temurin:21.0.12.1_1-jdk-noble@sha256:b468c3fc688b14450571494f588bd9
 # published in https://dl.google.com/android/repository/repository2-3.xml.
 ARG CMDLINE_TOOLS_BUILD=16111833
 ARG CMDLINE_TOOLS_SHA1=e025545c62a8e64c7559119566a569fb1dec5f60
-# compileSdk 37 (current AndroidX and Compose need it; targetSdk stays 36)
-# and the build-tools that AGP and the verification steps use.
-ARG SDK_PLATFORM=android-37.0
-ARG SDK_PLATFORM_REVISION=2
+# compileSdk 37.1 (current AndroidX and Compose need it, Compose 1.13 at
+# least 37.1; targetSdk stays 36) and the build-tools that AGP and the
+# verification steps use. Keep in step with compileSdk/compileSdkMinor in
+# gradle/libs.versions.toml.
+ARG SDK_PLATFORM=android-37.1
+ARG SDK_PLATFORM_REVISION=1
 ARG SDK_BUILD_TOOLS=36.1.0
 # AGP wants platform-tools present (it tries to install it otherwise). The
 # SDK manager always installs the newest one, so the build checks the version.

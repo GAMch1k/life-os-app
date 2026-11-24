@@ -12,6 +12,7 @@ val lifeosUpdatesRepo: String by rootProject.extra
 android {
     namespace = "com.gamch1k.lifeos.core"
     compileSdk = libs.versions.compileSdk.get().toInt()
+    compileSdkMinor = libs.versions.compileSdkMinor.get().toInt()
     buildToolsVersion = libs.versions.buildTools.get()
 
     defaultConfig {

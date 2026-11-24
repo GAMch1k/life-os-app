@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.gamch1k.lifeos.phone"
     compileSdk = libs.versions.compileSdk.get().toInt()
+    compileSdkMinor = libs.versions.compileSdkMinor.get().toInt()
     buildToolsVersion = libs.versions.buildTools.get()
 
     defaultConfig {
