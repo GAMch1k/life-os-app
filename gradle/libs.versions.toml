@@ -1,7 +1,10 @@
 [versions]
-# Android SDK levels shared by the modules. compileSdk 37 because current
-# AndroidX/Compose releases require it; the apps still target 36.
+# Android SDK levels shared by the modules. compileSdk 37.1 (compileSdk 37,
+# compileSdkMinor 1) because current AndroidX/Compose releases require it
+# (Compose 1.13 wants 37.1 or later); the apps still target 36. The platform
+# must match tools/builder/Dockerfile (SDK_PLATFORM=android-37.1).
 compileSdk = "37"
+compileSdkMinor = "1"
 targetSdk = "36"
 phoneMinSdk = "34"
 wearMinSdk = "33"
@@ -47,7 +50,7 @@ bouncycastle = "1.87"
 # Java; nothing of ML Kit or CameraX.
 zxing = "3.5.4"
 
-# Build tools only, never in an APK (SEC-APP). AGP 9.5.1, the newest 9.x,
+# Build tools only, never in an APK (SEC-APP). AGP 9.5.2, the newest 9.x,
 # brings these libraries in versions with security advisories, on its own
 # classpath (the root project's buildscript classpath) and on lint's (each
 # module's androidLintTool). The root build.gradle.kts turns the
